@@ -107,7 +107,8 @@ cat > "$CONFIG_PATH" <<JSON
       "models": {
         "k2-horizon-7b": {
           "name": "K2 Horizon 7B (on PC)",
-          "limit": { "context": 65536, "output": 8192 }
+          "limit": { "context": 65536, "output": 8192 },
+          "options": { "temperature": 1.0, "topP": 0.95 }
         }
       }
     }

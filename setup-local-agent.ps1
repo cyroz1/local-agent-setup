@@ -215,7 +215,8 @@ $serverArgs = @(
     '-ngl', '99',
     '-fa', 'on',
     '-ub', '1024',
-    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1'
+    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1',
+    '--repeat-penalty', '1.08'
 ) + $extraArgs
 $serverLog = Join-Path $LogDir 'llama-server-first-run.log'
 Note "Starting llama-server to download the model (this is the big one, ~7GB)..."
@@ -364,7 +365,8 @@ $config = @'
       "models": {
         "k2-horizon-7b": {
           "name": "K2 Horizon 7B (local)",
-          "limit": { "context": 65536, "output": 8192 }
+          "limit": { "context": 65536, "output": 8192 },
+          "options": { "temperature": 1.0, "topP": 0.95 }
         }
       }
     }

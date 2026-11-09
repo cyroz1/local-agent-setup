@@ -88,4 +88,5 @@ if ($helpText -match 'no-reasoning-preserve') {
     -fa on `
     -ub 1024 `
     --cache-type-k q8_0 --cache-type-v q8_0 --no-mmproj --parallel 1 `
+    --repeat-penalty 1.08 `
     @extraArgs
