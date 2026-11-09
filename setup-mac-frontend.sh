@@ -57,9 +57,9 @@ if ! command -v node >/dev/null 2>&1; then
   brew install node || die "brew install node failed."
 fi
 note "node: $(node --version), npm: $(npm --version)"
-if ! command -v opencode >/dev/null 2>&1; then
-  note "Installing OpenCode..."
-  npm install -g opencode-ai || die "npm install -g opencode-ai failed."
+if ! opencode --version >/dev/null 2>&1; then
+  note "Installing OpenCode (npm blocks install scripts by default; opencode needs its postinstall allowed to fetch the right binary)..."
+  npm install -g --allow-scripts=opencode-ai opencode-ai || die "npm install -g opencode-ai failed."
 fi
 note "opencode: $(opencode --version)"
 

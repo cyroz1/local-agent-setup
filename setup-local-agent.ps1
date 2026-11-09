@@ -186,11 +186,23 @@ try {
 
 # ---------------------------------------------------------------- OpenCode
 Step 'OpenCode'
+# npm 12 blocks package install scripts by default, and opencode-ai needs its
+# postinstall to fetch the correct platform binary. Without it the install
+# "succeeds" but leaves a broken opencode.exe (hit on 2026-11-09), so detect
+# a broken install and repair it instead of trusting that the command exists.
+$opencodeOk = $false
 if (Test-Cmd 'opencode') {
-    Note "opencode already installed, skipping."
+    $ErrorActionPreference = 'Continue'
+    $probe = opencode --version 2>$null
+    $ErrorActionPreference = 'Stop'
+    if ($probe) { $opencodeOk = $true }
+}
+if ($opencodeOk) {
+    Note "opencode already installed ($probe), skipping."
 } else {
-    Note 'Installing opencode-ai from npm...'
-    npm install -g opencode-ai | Out-Host
+    Note 'Installing opencode-ai from npm (postinstall allowed for this package)...'
+    npm install -g --allow-scripts=opencode-ai opencode-ai | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "npm install of opencode-ai failed (exit $LASTEXITCODE)." }
     Refresh-Path
 }
 if (-not (Test-Cmd 'opencode')) { throw 'OpenCode installed but not on PATH. Open a new terminal and re-run.' }
