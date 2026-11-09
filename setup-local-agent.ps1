@@ -194,9 +194,15 @@ Step 'OpenCode'
 $OpencodeDir = Join-Path $InstallRoot 'opencode'
 $OpencodeExe = Join-Path $OpencodeDir 'opencode.exe'
 $opencodeOk = $false
+$probe = $null
 if (Test-Cmd 'opencode') {
-    $ErrorActionPreference = 'Continue'
-    $probe = opencode --version 2>$null
+    # A broken shim (the npm leftover) fails with a terminating error that
+    # ErrorActionPreference=Continue does NOT contain; only try/catch does.
+    # That unguarded probe is what stopped the run on 2026-11-09.
+    try {
+        $ErrorActionPreference = 'Continue'
+        $probe = opencode --version 2>$null
+    } catch { $probe = $null }
     $ErrorActionPreference = 'Stop'
     if ($probe) { $opencodeOk = $true }
 }
@@ -235,7 +241,13 @@ if ($opencodeOk) {
     Refresh-Path
 }
 if (-not (Test-Cmd 'opencode')) { throw 'OpenCode installed but not on PATH. Open a new terminal and re-run.' }
-Note "opencode: $(opencode --version)"
+try {
+    $ErrorActionPreference = 'Continue'
+    $finalProbe = opencode --version 2>$null
+} catch { $finalProbe = $null }
+$ErrorActionPreference = 'Stop'
+if (-not $finalProbe) { throw 'OpenCode is installed but still does not run. Open a new terminal and re-run this setup.' }
+Note "opencode: $finalProbe"
 
 # ------------------------------------------------------- opencode.json config
 Step 'OpenCode config (provider + browser-use MCP servers)'
@@ -333,8 +345,12 @@ if (-not $SkipComputerUse) {
 
 # ---------------------------------------------------------------- sanity check
 Step 'Sanity check'
-Note "llama-server : $(& $ServerExe --version 2>&1 | Select-Object -First 1)"
-Note "opencode     : $(opencode --version)"
+$ErrorActionPreference = 'Continue'
+$sanityLlama = (& $ServerExe --version 2>&1 | Select-Object -First 1)
+try { $sanityOc = (opencode --version 2>$null) } catch { $sanityOc = 'did not run' }
+$ErrorActionPreference = 'Stop'
+Note "llama-server : $sanityLlama"
+Note "opencode     : $sanityOc"
 Note "config       : $ConfigPath (exists: $(Test-Path $ConfigPath))"
 Note "model cache  : $HOME\.cache\llama.cpp"
 Write-Host "`nDone. Next steps:" -ForegroundColor Green
