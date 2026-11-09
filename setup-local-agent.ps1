@@ -16,7 +16,7 @@
     3. Prefetches the coding model (first run of the server downloads ~6GB from
        Hugging Face) and smoke-tests the server on http://127.0.0.1:8080.
     4. Installs OpenCode (npm) and writes a global opencode.json that points it
-       at the local server and registers the Playwright + Chrome DevTools MCP
+       at the local server and registers the Playwright MCP
        servers (browser use) and a local computer-use MCP bridge (see step 5).
        An existing config is backed up, never clobbered.
     5. Computer use, two forms. Installs Python (the bridge is stdlib-only)
@@ -376,11 +376,6 @@ $config = @'
       "command": ["npx", "-y", "@playwright/mcp@latest"],
       "enabled": true
     },
-    "chrome-devtools": {
-      "type": "local",
-      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],
-      "enabled": true
-    },
     "computer-use": {
       "type": "local",
       "command": ["python", "__BRIDGE_PATH__"],
@@ -427,7 +422,7 @@ Step 'Warming up the MCP servers (first npx download happens now, not mid-sessio
 # ErrorActionPreference=Stop, the first notice becomes a fake failure (the
 # "(npm notice ...)" warnings on 2026-11-09, the packages were fine).
 $ErrorActionPreference = 'Continue'
-foreach ($pkgName in '@playwright/mcp@latest', 'chrome-devtools-mcp@latest') {
+foreach ($pkgName in '@playwright/mcp@latest') {
     $warmLog = Join-Path $LogDir ("npx-warmup-" + ($pkgName -replace '[^a-zA-Z0-9]', '_') + '.log')
     npx -y $pkgName --version 1>$warmLog 2>&1
     if ($LASTEXITCODE -eq 0) { Note "$pkgName ready." }
@@ -490,7 +485,7 @@ Note "config       : $ConfigPath (exists: $(Test-Path $ConfigPath))"
 Note "model cache  : $HOME\.cache\llama.cpp"
 Write-Host "`nDone. Next steps:" -ForegroundColor Green
 Write-Host '  1. Run .\start-coding.ps1 from any project folder, then run: opencode'
-Write-Host '  2. Browser use is already wired into OpenCode through the Playwright and Chrome DevTools MCP servers.'
+Write-Host '  2. Browser use is already wired into OpenCode through the Playwright MCP server.'
 Write-Host '  3. Computer use from OpenCode: close the coding server, run .\start-computer-use.ps1, then ask the agent.'
 Write-Host '     Standalone alternative: install UI-TARS Desktop from the downloads folder and use it with the same vision server.'
 Write-Host "Full log: $LogFile"

@@ -5,7 +5,7 @@
 #   1. Checks it can actually reach the PC's model server before changing anything.
 #   2. Installs Node (via Homebrew) and OpenCode.
 #   3. Writes ~/.config/opencode/opencode.json pointing at the PC, with the
-#      Playwright + Chrome DevTools MCP servers (browser use runs here,
+#      Playwright MCP server (browser use runs here,
 #      against your Mac's browsers).
 #   4. Downloads the UI-TARS Desktop app (computer use UI runs here, its
 #      vision model is served by the PC on port 8081).
@@ -118,11 +118,6 @@ cat > "$CONFIG_PATH" <<JSON
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp@latest"],
       "enabled": true
-    },
-    "chrome-devtools": {
-      "type": "local",
-      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],
-      "enabled": true
     }
   }
 }
@@ -147,7 +142,7 @@ else
 fi
 
 step "Warming up the MCP servers"
-for pkg in "@playwright/mcp@latest" "chrome-devtools-mcp@latest"; do
+for pkg in "@playwright/mcp@latest"; do
   if npx -y "$pkg" --version >/dev/null 2>&1; then
     note "$pkg ready."
   else
@@ -157,10 +152,7 @@ done
 if npx -y playwright@latest install chromium >/dev/null 2>&1; then
   note "Playwright Chromium installed."
 else
-  warn "Playwright Chromium install failed. The MCP can also drive your installed Chrome."
-fi
-if [ ! -d "/Applications/Google Chrome.app" ]; then
-  warn "Google Chrome is not in /Applications. chrome-devtools-mcp needs Chrome; install it or rely on the Playwright MCP."
+  warn "Playwright Chromium install failed. Browser tasks will be limited until it succeeds."
 fi
 
 step "Computer use: UI-TARS Desktop (optional, guarded)"

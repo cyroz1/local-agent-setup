@@ -13,8 +13,8 @@ These rules describe the shell and environment on this machine. Follow them on e
 
 ## Browser tools
 
-- For browser tasks, use the Playwright MCP. It drives its own bundled Chromium and always works on this machine.
-- The chrome-devtools MCP only works if Google Chrome is installed in a standard location. If a chrome-devtools call fails with a "Chrome not installed" error, do not debug it and do not go hunting for browser executables in the shell: switch to Playwright and carry on with the task.
+- Browser work goes through the Playwright MCP. It drives its own bundled Chromium, so it works regardless of which browsers are installed.
+- There is no chrome-devtools MCP in this setup (it needed a Chrome install this machine does not have, and its failures sent the agent hunting through the shell). Do not go looking for browser executables: Playwright is the browser tool.
 
 ## Do not repeat yourself
 
