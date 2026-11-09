@@ -468,8 +468,8 @@ Note "model cache  : $HOME\.cache\llama.cpp"
 Write-Host "`nDone. Next steps:" -ForegroundColor Green
 Write-Host '  1. Run .\start-coding.ps1 from any project folder, then run: opencode'
 Write-Host '  2. Browser use is already wired into OpenCode through the Playwright and Chrome DevTools MCP servers.'
-Write-Host '  3. Computer use from OpenCode: run .\start-agent.ps1 (starts BOTH model servers), then just ask the agent.'
-Write-Host '     Standalone alternative: install UI-TARS Desktop from the downloads folder, then run .\start-computer-use.ps1'
+Write-Host '  3. Computer use from OpenCode: close the coding server, run .\start-computer-use.ps1, then ask the agent.'
+Write-Host '     Standalone alternative: install UI-TARS Desktop from the downloads folder and use it with the same vision server.'
 Write-Host "Full log: $LogFile"
 
 } catch {

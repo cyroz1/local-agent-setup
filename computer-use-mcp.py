@@ -385,8 +385,9 @@ def vision_chat(prompt, png_bytes, max_tokens=256):
     except urllib.error.URLError as exc:
         raise RuntimeError(
             f"UI-TARS server is not answering at {BASE_URL} ({exc}). "
-            "Start it with start-computer-use.ps1 (or start-agent.ps1) "
-            "and leave that window open."
+            "Start it with start-computer-use.ps1 (close the coding "
+            "server first, the vision model needs the card) and leave "
+            "that window open."
         )
     try:
         return data["choices"][0]["message"]["content"] or ""

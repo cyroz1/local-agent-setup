@@ -10,11 +10,11 @@
       settings (Base URL http://127.0.0.1:8081/v1, API key anything,
       Model ui-tars-1.5-7b) and give it tasks in the app itself.
 
-  16GB card note: the 7B coder (~6.6GB) and this vision model (~5GB) fit
-  at the same time, so both servers can stay up (start-agent.ps1 starts
-  both). Expect some slowdown while both are busy. This server runs an
-  8K context with a q4_0 cache: screenshots are only a few thousand
-  tokens, so anything bigger just wastes VRAM.
+  16GB card note: the coding server takes roughly 13 to 15.5GB on its
+  own (the 64K KV cache alone is ~5.1GB), so this vision server runs
+  INSTEAD of it, not alongside: close the coding server window first.
+  This server runs an 8K context with a q4_0 cache: screenshots are
+  only a few thousand tokens, so anything bigger just wastes VRAM.
 
   Watch the first runs either way: local computer use is a tier below the
   frontier cloud agents, fine for simple GUI tasks, not something to
@@ -34,13 +34,13 @@ if (-not (Test-Path $ServerExe)) {
     exit 1
 }
 
-# The coding server being up at the same time is fine now (both models
-# fit in 16GB); it only costs some speed while both are busy.
+# The coding server holds roughly 13 to 15.5GB of the 16GB card, so if
+# it is still up, this model will spill into system RAM or fail to load.
 try {
     $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 2
     if ($h.status -eq 'ok') {
-        Write-Host 'Note: the coding server is also running on port 8080.' -ForegroundColor Yellow
-        Write-Host 'That is fine (both models fit in 16GB); expect some slowdown while both are busy.'
+        Write-Host 'WARNING: the coding server is running on port 8080.' -ForegroundColor Yellow
+        Write-Host 'It holds most of the VRAM. Close its window first, or UI-TARS will crawl or fail to load.'
         Write-Host ''
     }
 } catch { }

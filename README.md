@@ -17,9 +17,6 @@ powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
 # every work session: start the model server, leave the window open
 .\start-coding.ps1
 
-# ...or start the coding AND vision servers together (needed for computer use)
-.\start-agent.ps1
-
 # then in your project folder
 opencode
 ```
@@ -30,14 +27,14 @@ Skip the computer-use download during setup with `-SkipComputerUse`.
 
 Two ways to use it:
 
-**From inside OpenCode (the bridge).** Run `.\start-agent.ps1` — it starts the coding server (8080) and the UI-TARS vision server (8081) in separate windows. Then just ask the agent in OpenCode. It has `computer_*` tools: find and click elements by description, click at coordinates, type, press hotkeys, scroll, describe the screen, or carry out one GUI action per call. The calling model never sees the screenshots — the bridge sends them to the UI-TARS model on 8081 and hands back coordinates and status text, which is what lets a text-only model drive a desktop. Supervise it: the vision model is a local 7B, fine for simple GUI tasks, not for unattended work.
+**From inside OpenCode (the bridge).** Close the coding server, run `.\start-computer-use.ps1` (the vision model needs the card to itself), then run OpenCode. It has `computer_*` tools: find and click elements by description, click at coordinates, type, press hotkeys, scroll, describe the screen, or carry out one GUI action per call. The calling model never sees the screenshots — the bridge sends them to the UI-TARS model on 8081 and hands back coordinates and status text, which is what lets a text-only model drive a desktop. Supervise it: the vision model is a local 7B, fine for simple GUI tasks, not for unattended work.
 
 **Standalone (UI-TARS Desktop).** Run the installer from `%LOCALAPPDATA%\local-agent\downloads` (the setup script downloads it but does not auto-install it), run `.\start-computer-use.ps1`, and in the app's settings point it at the local endpoint: base URL `http://127.0.0.1:8081/v1`, model `ui-tars-1.5-7b`, any non-empty API key.
 
 ## The 16GB fit, in numbers
 
 - K2 Horizon 7B at Q5_K_M is ~6.6GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q8_0. Nothing runs on the CPU.
-- Both servers at once also fits: ~6.6GB coder + ~0.7GB draft model + ~5GB UI-TARS vision model + caches stays inside 16GB, with some slowdown while both are busy. The vision server runs an 8K context and the bridge downscales screenshots to 1344 wide before sending them, so computer-use calls stay cheap.
+- One server at a time on this card. The coding server totals roughly 13 to 15.5GB (weights ~6.6GB, the 64K q8_0 KV cache ~5.1GB, draft model and its cache ~1.5 to 3.5GB, buffers ~1GB), and the UI-TARS vision server needs ~6GB, so they cannot share the 16GB. Computer use is on demand: close the coding server, start the vision server. The vision server runs an 8K context and the bridge downscales screenshots to 1344 wide before sending them, so computer-use calls stay cheap.
 - Speculative decoding is on: the same-family K2 0.9B drafts tokens and the 7B verifies them in batches, worth roughly 1.5-2.5x on code generation. The start scripts probe the llama.cpp build's `--help` before adding the flags (ngram speculation as fallback), so an engine update cannot break startup. The model's old reasoning is also not preserved into later turns (`--no-reasoning-preserve`), which keeps long agent sessions from bloating.
 - Raw generation is roughly 90 to 110 tok/s at short context; deep into a long session (50K+ tokens of context) expect more like 35 to 60, because every new token re-reads the whole KV cache.
 - Prompt processing is AMD's weak side (about 3x slower than NVIDIA), so very long contexts take a while to load. 64K context is the default; edit `-c` in start-coding.ps1 if you need 128K.
