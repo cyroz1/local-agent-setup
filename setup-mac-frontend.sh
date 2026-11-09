@@ -58,8 +58,25 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 note "node: $(node --version), npm: $(npm --version)"
 if ! opencode --version >/dev/null 2>&1; then
-  note "Installing OpenCode (npm blocks install scripts by default; opencode needs its postinstall allowed to fetch the right binary)..."
-  npm install -g --allow-scripts=opencode-ai opencode-ai || die "npm install -g opencode-ai failed."
+  note "Installing OpenCode from the standalone GitHub release zip."
+  note "(Not npm: npm blocks opencode's postinstall, which is what fetches the real binary.)"
+  if command -v npm >/dev/null 2>&1; then npm uninstall -g opencode-ai >/dev/null 2>&1 || true; fi
+  OC_JSON="$(curl -s -m 20 -H 'User-Agent: local-agent-setup' https://api.github.com/repos/anomalyco/opencode/releases/latest || true)"
+  OC_URL="$(printf '%s' "$OC_JSON" | grep -oE 'https://[^"]+/opencode-darwin-arm64\.zip' | head -n 1 || true)"
+  [ -n "$OC_URL" ] || die "Could not find opencode-darwin-arm64.zip on the latest OpenCode release."
+  mkdir -p "$HOME/.local/bin"
+  OC_TMP="$(mktemp -d)"
+  curl -fL -o "$OC_TMP/opencode.zip" "$OC_URL" || die "OpenCode download failed."
+  unzip -o -q "$OC_TMP/opencode.zip" -d "$OC_TMP/extract" || die "OpenCode unzip failed."
+  OC_BIN="$(find "$OC_TMP/extract" -name opencode -type f | head -n 1)"
+  [ -n "$OC_BIN" ] || die "opencode binary not found inside the release zip."
+  install -m 755 "$OC_BIN" "$HOME/.local/bin/opencode"
+  rm -rf "$OC_TMP"
+  export PATH="$HOME/.local/bin:$PATH"
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) : ;;
+    *) warn "~/.local/bin is not on your PATH for new shells. Add this to ~/.zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
 fi
 note "opencode: $(opencode --version)"
 

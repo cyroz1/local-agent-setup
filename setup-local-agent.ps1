@@ -186,10 +186,13 @@ try {
 
 # ---------------------------------------------------------------- OpenCode
 Step 'OpenCode'
-# npm 12 blocks package install scripts by default, and opencode-ai needs its
-# postinstall to fetch the correct platform binary. Without it the install
-# "succeeds" but leaves a broken opencode.exe (hit on 2026-11-09), so detect
-# a broken install and repair it instead of trusting that the command exists.
+# Installed from the standalone GitHub release zip, not npm: npm 12 blocks
+# opencode-ai's postinstall (which fetches the platform binary) and leaves a
+# broken opencode.exe behind, and the --allow-scripts flag did not save it
+# either (both hit on 2026-11-09). The release zip is the real binary, no
+# install scripts involved.
+$OpencodeDir = Join-Path $InstallRoot 'opencode'
+$OpencodeExe = Join-Path $OpencodeDir 'opencode.exe'
 $opencodeOk = $false
 if (Test-Cmd 'opencode') {
     $ErrorActionPreference = 'Continue'
@@ -200,9 +203,35 @@ if (Test-Cmd 'opencode') {
 if ($opencodeOk) {
     Note "opencode already installed ($probe), skipping."
 } else {
-    Note 'Installing opencode-ai from npm (postinstall allowed for this package)...'
-    npm install -g --allow-scripts=opencode-ai opencode-ai | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "npm install of opencode-ai failed (exit $LASTEXITCODE)." }
+    # A broken npm copy would shadow the real binary on PATH. Remove it.
+    if (Test-Cmd 'npm') {
+        Note 'Removing any broken npm copy of opencode-ai so it cannot shadow the real binary...'
+        $ErrorActionPreference = 'Continue'
+        npm uninstall -g opencode-ai 2>$null | Out-Null
+        $ErrorActionPreference = 'Stop'
+        Refresh-Path
+    }
+    New-Item -ItemType Directory -Force -Path $OpencodeDir | Out-Null
+    if (-not (Test-Path $OpencodeExe)) {
+        $headers = @{ 'User-Agent' = 'local-agent-setup' }
+        $ocRelease = Invoke-RestMethod -Uri 'https://api.github.com/repos/anomalyco/opencode/releases/latest' -Headers $headers
+        $ocAsset = $ocRelease.assets | Where-Object { $_.name -eq 'opencode-windows-x64.zip' } | Select-Object -First 1
+        if (-not $ocAsset) { throw 'opencode-windows-x64.zip not found on the latest OpenCode release.' }
+        $ocZip = Join-Path $DownloadsDir $ocAsset.name
+        Note "Downloading $($ocAsset.name) ($([math]::Round($ocAsset.size / 1MB)) MB)..."
+        Invoke-WebRequest -Uri $ocAsset.browser_download_url -OutFile $ocZip -Headers $headers
+        Expand-Archive -Path $ocZip -DestinationPath $OpencodeDir -Force
+        if (-not (Test-Path $OpencodeExe)) {
+            $nestedExe = Get-ChildItem -Path $OpencodeDir -Recurse -Filter 'opencode.exe' | Select-Object -First 1
+            if ($nestedExe) { Copy-Item -Path (Join-Path $nestedExe.DirectoryName '*') -Destination $OpencodeDir -Recurse -Force }
+        }
+        if (-not (Test-Path $OpencodeExe)) { throw 'opencode.exe not found after extracting the release zip.' }
+    }
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ($userPath -notlike "*$OpencodeDir*") {
+        [Environment]::SetEnvironmentVariable('Path', "$userPath;$OpencodeDir", 'User')
+        Note "Added $OpencodeDir to your user PATH (new terminals will see it)."
+    }
     Refresh-Path
 }
 if (-not (Test-Cmd 'opencode')) { throw 'OpenCode installed but not on PATH. Open a new terminal and re-run.' }
