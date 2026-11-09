@@ -152,7 +152,7 @@ try {
 }
 
 # ----------------------------------------------------------------- firewall
-Step 'Windows Firewall (Private profile only, ports 8080 and 8081)'
+Step 'Windows Firewall (Private profile + Tailscale range, ports 8080 and 8081)'
 try {
     foreach ($port in 8080, 8081) {
         $ruleName = "Local Agent llama-server $port"
@@ -164,10 +164,27 @@ try {
             Note "Rule for port $port already exists."
         }
     }
+    # Tailscale traffic arrives on its own adapter, which Windows often
+    # classifies as Public, so the Private rules above can miss it. Admit
+    # the same ports from the Tailscale CGNAT range (100.64.0.0/10) on
+    # any profile: only tailnet members can source those addresses, and
+    # the servers still require the API key on top.
+    foreach ($port in 8080, 8081) {
+        $tsName = "Local Agent llama-server $port (Tailscale)"
+        if (-not (Get-NetFirewallRule -DisplayName $tsName -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName $tsName -Direction Inbound -Action Allow `
+                -Protocol TCP -LocalPort $port -Program $ServerExe -Profile Any `
+                -RemoteAddress '100.64.0.0/10' | Out-Null
+            Note "Tailscale rule added for port $port."
+        } else {
+            Note "Tailscale rule for port $port already exists."
+        }
+    }
 } catch {
     Warn 'Firewall rule could not be added (needs an Administrator PowerShell).'
-    Note 'Run this once, elevated, then the Mac can connect:'
+    Note 'Run these once, elevated, then the Mac can connect:'
     Note "  New-NetFirewallRule -DisplayName 'Local Agent llama-server' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080,8081 -Program '$ServerExe' -Profile Private"
+    Note "  New-NetFirewallRule -DisplayName 'Local Agent llama-server TS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8080,8081 -Program '$ServerExe' -Profile Any -RemoteAddress '100.64.0.0/10'"
 }
 
 # --------------------------------------------------------------- final report
