@@ -132,7 +132,10 @@ if (Test-Path $ServerExe) {
     }
     if (-not (Test-Path $ServerExe)) { throw "llama-server.exe not found after extracting $($asset.name)." }
 }
-Note "llama.cpp: $(& $ServerExe --version 2>&1 | Select-Object -First 1)"
+$ErrorActionPreference = 'Continue'
+$versionLine = (& $ServerExe --version 2>&1 | Select-Object -First 1)
+$ErrorActionPreference = 'Stop'
+Note "llama.cpp: $versionLine"
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*$LlamaDir*") {

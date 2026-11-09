@@ -92,7 +92,10 @@ if (Test-Path $ServerExe) {
     }
     if (-not (Test-Path $ServerExe)) { throw "llama-server.exe not found after extracting $($asset.name)." }
 }
-Note "llama.cpp: $(& $ServerExe --version 2>&1 | Select-Object -First 1)"
+$ErrorActionPreference = 'Continue'
+$versionLine = (& $ServerExe --version 2>&1 | Select-Object -First 1)
+$ErrorActionPreference = 'Stop'
+Note "llama.cpp: $versionLine"
 
 # ------------------------------------------------------------------ API key
 Step 'API key (shared secret between this PC and the Mac)'
