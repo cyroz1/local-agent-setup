@@ -3,7 +3,7 @@
 A fully local agentic coding setup for the RX 7900 GRE:
 
 - **llama.cpp** (Vulkan build) serves the model. Vulkan is the reliable path on AMD consumer cards on Windows.
-- **Qwen2.5-Coder 14B** (dense, Q4_K_M, ~9GB) does the coding. It is the Qwen team's model built specifically for coding, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
+- **K2 Horizon 7B** (dense, Q4_K_M, ~5.6GB) does the coding. It is a September 2026 model from MBZUAI's Institute of Foundation Models, the top independently scored model in the 8-16GB tier, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
 - **OpenCode** is the harness: agent loop, file edits, shell, sub-agents.
 - **Browser use** comes from two MCP servers wired into OpenCode: Playwright MCP and Chrome DevTools MCP.
 - **Computer use** is UI-TARS Desktop driving its own 7B vision model, also served locally by llama.cpp.
@@ -11,7 +11,7 @@ A fully local agentic coding setup for the RX 7900 GRE:
 ## Run it
 
 ```powershell
-# one time (downloads ~9GB of model, logs everything, safe to re-run)
+# one time (downloads ~6GB of model, logs everything, safe to re-run)
 powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
 
 # every work session: start the model server, leave the window open

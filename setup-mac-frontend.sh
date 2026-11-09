@@ -93,8 +93,8 @@ cat > "$CONFIG_PATH" <<JSON
 {
   "\$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
-  "model": "llama.cpp/qwen2.5-coder-14b",
-  "small_model": "llama.cpp/qwen2.5-coder-14b",
+  "model": "llama.cpp/k2-horizon-7b",
+  "small_model": "llama.cpp/k2-horizon-7b",
   "enabled_providers": ["llama.cpp"],
   "provider": {
     "llama.cpp": {
@@ -105,8 +105,8 @@ cat > "$CONFIG_PATH" <<JSON
         "apiKey": "$API_KEY"
       },
       "models": {
-        "qwen2.5-coder-14b": {
-          "name": "Qwen2.5-Coder 14B (on PC)",
+        "k2-horizon-7b": {
+          "name": "K2 Horizon 7B (on PC)",
           "limit": { "context": 65536, "output": 8192 }
         }
       }
@@ -172,7 +172,7 @@ note "And start start-vision-pc.ps1 on the PC first (stop the coding server befo
 step "Sanity check"
 MODELS="$(curl -s -m 5 -H "Authorization: Bearer $API_KEY" "http://$PC_HOST:$CODING_PORT/v1/models" || true)"
 case "$MODELS" in
-  *qwen2.5-coder-14b*) note "PC is serving qwen2.5-coder-14b. You are set." ;;
+  *k2-horizon-7b*) note "PC is serving k2-horizon-7b. You are set." ;;
   *) warn "Could not confirm the model list from the PC (got: ${MODELS:-nothing}). OpenCode will surface any connection problem on first run." ;;
 esac
 printf '\nDone. Run:  opencode   in any project folder on this Mac.\n'

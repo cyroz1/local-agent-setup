@@ -5,7 +5,7 @@
   The Mac runs OpenCode and points at http://<this-pc>:8080/v1 with the
   API key from api-key.txt.
 
-  The model is dense 14B at Q4_K_M (~9GB), fully on the GPU (-ngl 99),
+  The model is dense 7B at Q4_K_M (~5.6GB), fully on the GPU (-ngl 99),
   nothing offloaded to the CPU.
 #>
 
@@ -14,8 +14,8 @@ $ErrorActionPreference = 'Stop'
 $InstallRoot = "$env:LOCALAPPDATA\local-agent"
 $ServerExe   = Join-Path $InstallRoot 'llama.cpp\llama-server.exe'
 $KeyFile     = Join-Path $InstallRoot 'api-key.txt'
-$ModelRepo   = 'Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M'
-$ModelAlias  = 'qwen2.5-coder-14b'
+$ModelRepo   = 'IFM/K2-Horizon-7B-GGUF:Q4_K_M'
+$ModelAlias  = 'k2-horizon-7b'
 $Port        = 8080
 
 if (-not (Test-Path $ServerExe)) { Write-Host 'llama-server not found. Run setup-pc-server.ps1 first.' -ForegroundColor Red; exit 1 }
@@ -42,5 +42,5 @@ Write-Host ''
     -c 65536 --jinja `
     -ngl 99 `
     -fa on `
-    --cache-type-k q4_0 --cache-type-v q4_0 --no-mmproj --parallel 1 `
+    --cache-type-k q8_0 --cache-type-v q8_0 --no-mmproj --parallel 1 `
     --api-key $ApiKey

@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Local agentic coding stack for a 16GB AMD card (RX 7900 GRE class):
-  llama.cpp (Vulkan) + Qwen2.5-Coder 14B (dense) + OpenCode + browser-use
+  llama.cpp (Vulkan) + K2 Horizon 7B (dense) + OpenCode + browser-use
   MCP servers + optional UI-TARS computer use.
 
 .DESCRIPTION
@@ -13,7 +13,7 @@
     1. Installs Git and Node.js LTS via winget (skips whatever is already present).
     2. Downloads the latest llama.cpp Windows Vulkan build from GitHub and puts
        it in $InstallRoot\llama.cpp (added to your user PATH).
-    3. Prefetches the coding model (first run of the server downloads ~9GB from
+    3. Prefetches the coding model (first run of the server downloads ~6GB from
        Hugging Face) and smoke-tests the server on http://127.0.0.1:8080.
     4. Installs OpenCode (npm) and writes a global opencode.json that points it
        at the local server and registers the Playwright + Chrome DevTools MCP
@@ -23,11 +23,13 @@
        downloaded only, not auto-run, and the UI-TARS model is served on demand
        by start-computer-use.ps1.
 
-  The model is Qwen2.5-Coder-14B-Instruct (dense, built by the Qwen team
-  specifically for coding). At Q4_K_M it is ~9GB, so it loads entirely into
-  the 7900 GRE's 16GB of VRAM with room for a 64K context. No CPU offloading,
-  no MoE tricks. (It replaced Devstral Small 2 24B, which was stronger but
-  roughly half the speed on this card.)
+  The model is K2 Horizon 7B (dense, from MBZUAI's Institute of Foundation
+  Models, September 2026). At Q4_K_M it is ~5.6GB, so it loads entirely
+  into the 7900 GRE's 16GB of VRAM with room for a 64K context and a q8_0
+  KV cache. No CPU offloading, no MoE tricks. It is a 7B, so it will not
+  out-think the 24B it ultimately replaces on hard problems; it wins on
+  speed (roughly 90-110 tok/s on this card) and on being the top
+  independently scored model in its size tier.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
@@ -39,8 +41,8 @@
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\local-agent",
     # Any llama.cpp -hf repo:quant works here.
-    [string]$ModelRepo   = "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M",
-    [string]$ModelAlias  = "qwen2.5-coder-14b",
+    [string]$ModelRepo   = "IFM/K2-Horizon-7B-GGUF:Q4_K_M",
+    [string]$ModelAlias  = "k2-horizon-7b",
     [int]$Port           = 8080,
     [switch]$SkipComputerUse
 )
@@ -74,7 +76,7 @@ Note "GPU(s): $($gpus -join ', ')"
 $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($InstallRoot).Substring(0,1))
 $freeGb = [math]::Round($drive.Free / 1GB, 1)
 Note "Free space on install drive: $freeGb GB"
-if ($freeGb -lt 30) { Warn "Under 30GB free. The coder model alone is ~9GB, UI-TARS adds ~5GB. Free space or pass -InstallRoot on a bigger drive." }
+if ($freeGb -lt 30) { Warn "Under 30GB free. The coder model alone is ~6GB, UI-TARS adds ~5GB. Free space or pass -InstallRoot on a bigger drive." }
 
 # ---------------------------------------------------------------- winget apps
 Step 'Git and Node.js (winget)'
@@ -154,10 +156,10 @@ $serverArgs = @(
     '-c', '65536', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
-    '--cache-type-k', 'q4_0', '--cache-type-v', 'q4_0', '--no-mmproj', '--parallel', '1'
+    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1'
 )
 $serverLog = Join-Path $LogDir 'llama-server-first-run.log'
-Note "Starting llama-server to download the model (this is the big one, ~9GB)..."
+Note "Starting llama-server to download the model (this is the big one, ~6GB)..."
 Note "Live download progress: $serverLog"
 $proc = Start-Process -FilePath $ServerExe -ArgumentList $serverArgs -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err"
@@ -264,8 +266,8 @@ $config = @'
 {
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
-  "model": "llama.cpp/qwen2.5-coder-14b",
-  "small_model": "llama.cpp/qwen2.5-coder-14b",
+  "model": "llama.cpp/k2-horizon-7b",
+  "small_model": "llama.cpp/k2-horizon-7b",
   "enabled_providers": ["llama.cpp"],
   "provider": {
     "llama.cpp": {
@@ -273,8 +275,8 @@ $config = @'
       "name": "llama.cpp (local)",
       "options": { "baseURL": "http://127.0.0.1:8080/v1" },
       "models": {
-        "qwen2.5-coder-14b": {
-          "name": "Qwen2.5-Coder 14B (local)",
+        "k2-horizon-7b": {
+          "name": "K2 Horizon 7B (local)",
           "limit": { "context": 65536, "output": 8192 }
         }
       }
