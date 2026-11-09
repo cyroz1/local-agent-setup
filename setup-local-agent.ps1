@@ -299,30 +299,41 @@ Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 Note "Wrote $ConfigPath"
 
 Step 'Warming up the MCP servers (first npx download happens now, not mid-session)'
+# Judge these by exit code, never by captured output: npm writes notice lines
+# to stderr, and with 2>&1 merged into the pipeline under
+# ErrorActionPreference=Stop, the first notice becomes a fake failure (the
+# "(npm notice ...)" warnings on 2026-11-09, the packages were fine).
+$ErrorActionPreference = 'Continue'
 foreach ($pkgName in '@playwright/mcp@latest', 'chrome-devtools-mcp@latest') {
-    try {
-        npx -y $pkgName --version 2>&1 | Out-Null
-        Note "$pkgName ready."
-    } catch {
-        Warn "$pkgName warm-up failed ($($_.Exception.Message)). It will retry on first use inside OpenCode."
-    }
+    $warmLog = Join-Path $LogDir ("npx-warmup-" + ($pkgName -replace '[^a-zA-Z0-9]', '_') + '.log')
+    npx -y $pkgName --version 1>$warmLog 2>&1
+    if ($LASTEXITCODE -eq 0) { Note "$pkgName ready." }
+    else { Warn "$pkgName warm-up exited $LASTEXITCODE. It will retry on first use inside OpenCode. Log: $warmLog" }
 }
-try {
-    Note 'Making sure a Chromium build exists for the Playwright MCP...'
-    npx -y playwright@latest install chromium 2>&1 | Out-Host
-} catch {
-    Warn "Playwright Chromium install failed ($($_.Exception.Message)). The MCP can also drive your installed Chrome; check its docs if browser use errors."
-}
+Note 'Making sure a Chromium build exists for the Playwright MCP...'
+$pwLog = Join-Path $LogDir 'playwright-install.log'
+npx -y playwright@latest install chromium 1>$pwLog 2>&1
+if ($LASTEXITCODE -eq 0) { Note 'Playwright Chromium ready.' }
+else { Warn "Playwright Chromium install exited $LASTEXITCODE. The MCP can also drive your installed Chrome. Log: $pwLog" }
+$ErrorActionPreference = 'Stop'
 
 # ------------------------------------------------------------- UI-TARS (opt.)
 if (-not $SkipComputerUse) {
     Step 'Computer use: UI-TARS Desktop (optional, guarded)'
     try {
         $headers = @{ 'User-Agent' = 'local-agent-setup' }
-        $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/bytedance/UI-TARS-desktop/releases/latest' -Headers $headers
-        $exe = $rel.assets | Where-Object { $_.name -match '(?i)win' -and $_.name -like '*.exe' } | Select-Object -First 1
-        if (-not $exe) { $exe = $rel.assets | Where-Object { $_.name -like '*.exe' } | Select-Object -First 1 }
+        # The newest releases (v0.3.x) are CLI-only and carry no desktop
+        # binaries at all; the last release with the desktop app is v0.2.4
+        # (UI-TARS-0.2.4-Setup.exe). Scan recent releases, first Setup exe wins.
+        $tarsReleases = Invoke-RestMethod -Uri 'https://api.github.com/repos/bytedance/UI-TARS-desktop/releases?per_page=30' -Headers $headers
+        $exe = $null
+        $tarsTag = $null
+        foreach ($tarsRel in $tarsReleases) {
+            $foundExe = $tarsRel.assets | Where-Object { $_.name -match '^UI-TARS-.*-Setup\.exe$' } | Select-Object -First 1
+            if ($foundExe) { $exe = $foundExe; $tarsTag = $tarsRel.tag_name; break }
+        }
         if ($exe) {
+            Note "Found the desktop app on release $tarsTag (newer releases are CLI-only)."
             $dest = Join-Path $DownloadsDir $exe.name
             if (-not (Test-Path $dest)) {
                 Note "Downloading $($exe.name)..."
@@ -332,7 +343,7 @@ if (-not $SkipComputerUse) {
             Note 'It is NOT auto-installed. Run it once yourself, then use start-computer-use.ps1,'
             Note 'which serves the UI-TARS vision model locally and prints the settings to paste in.'
         } else {
-            Warn 'No Windows .exe asset found on the latest UI-TARS Desktop release.'
+            Warn 'No UI-TARS Setup exe found in the 30 most recent UI-TARS Desktop releases.'
             Note 'Grab it manually: https://github.com/bytedance/UI-TARS-desktop/releases'
         }
     } catch {

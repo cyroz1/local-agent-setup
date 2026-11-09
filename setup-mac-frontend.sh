@@ -147,11 +147,11 @@ fi
 
 step "Computer use: UI-TARS Desktop (optional, guarded)"
 TARS_DIR="$HOME/Downloads"
-API_JSON="$(curl -s -m 20 -H 'User-Agent: local-agent-setup' https://api.github.com/repos/bytedance/UI-TARS-desktop/releases/latest || true)"
-DMG_URL="$(printf '%s' "$API_JSON" | grep -oE 'https://[^"]+\.dmg' | grep -iE 'arm64|aarch64|darwin|mac' | head -n 1 || true)"
-if [ -z "$DMG_URL" ]; then
-  DMG_URL="$(printf '%s' "$API_JSON" | grep -oE 'https://[^"]+\.dmg' | head -n 1 || true)"
-fi
+# The newest releases (v0.3.x) are CLI-only with no desktop binaries; the
+# last desktop app release is v0.2.4 (UI-TARS-0.2.4-arm64.dmg). Scan the
+# release list for that asset.
+API_JSON="$(curl -s -m 30 -H 'User-Agent: local-agent-setup' 'https://api.github.com/repos/bytedance/UI-TARS-desktop/releases?per_page=30' || true)"
+DMG_URL="$(printf '%s' "$API_JSON" | grep -oE 'https://[^"]+/UI-TARS-[^"]+-arm64\.dmg' | head -n 1 || true)"
 if [ -n "$DMG_URL" ]; then
   DMG_FILE="$TARS_DIR/$(basename "$DMG_URL")"
   if [ ! -f "$DMG_FILE" ]; then
@@ -160,7 +160,7 @@ if [ -n "$DMG_URL" ]; then
   fi
   [ -f "$DMG_FILE" ] && note "Saved to $DMG_FILE. Open it and drag UI-TARS Desktop into Applications."
 else
-  warn "Could not find a macOS .dmg on the latest UI-TARS Desktop release."
+  warn "Could not find a macOS .dmg in the 30 most recent UI-TARS Desktop releases."
   note "Manual route: https://github.com/bytedance/UI-TARS-desktop/releases"
 fi
 note "In UI-TARS Desktop settings, use the custom VLM endpoint:"
