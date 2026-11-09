@@ -10,9 +10,11 @@
       settings (Base URL http://127.0.0.1:8081/v1, API key anything,
       Model ui-tars-1.5-7b) and give it tasks in the app itself.
 
-  16GB card note: the 7B coder (~5.6GB) and this vision model (~5GB) fit
+  16GB card note: the 7B coder (~6.6GB) and this vision model (~5GB) fit
   at the same time, so both servers can stay up (start-agent.ps1 starts
-  both). Expect some slowdown while both are busy.
+  both). Expect some slowdown while both are busy. This server runs an
+  8K context with a q4_0 cache: screenshots are only a few thousand
+  tokens, so anything bigger just wastes VRAM.
 
   Watch the first runs either way: local computer use is a tier below the
   frontier cloud agents, fine for simple GUI tasks, not something to
@@ -59,6 +61,7 @@ Write-Host ''
     -hf $ModelRepo `
     --alias $ModelAlias `
     --host 127.0.0.1 --port $Port `
-    -c 32768 --jinja `
+    -c 8192 --jinja `
     -ngl 99 `
-    -fa on
+    -fa on `
+    --cache-type-k q4_0 --cache-type-v q4_0

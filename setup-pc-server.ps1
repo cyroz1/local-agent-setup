@@ -28,7 +28,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\local-agent",
-    [string]$ModelRepo   = "IFM/K2-Horizon-7B-GGUF:Q4_K_M",
+    [string]$ModelRepo   = "IFM/K2-Horizon-7B-GGUF:Q5_K_M",
     [string]$ModelAlias  = "k2-horizon-7b"
 )
 
@@ -121,7 +121,7 @@ $serverArgs = @(
     '-c', '65536', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
-    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1',
+    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1', '-ub', '1024',
     '--api-key', $ApiKey
 )
 $serverLog = Join-Path $LogDir 'pc-server-first-run.log'

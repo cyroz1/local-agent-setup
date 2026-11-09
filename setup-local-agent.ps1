@@ -30,12 +30,14 @@
        only, not auto-run.
 
   The model is K2 Horizon 7B (dense, from MBZUAI's Institute of Foundation
-  Models, September 2026). At Q4_K_M it is ~5.6GB, so it loads entirely
-  into the 7900 GRE's 16GB of VRAM with room for a 64K context and a q8_0
-  KV cache. No CPU offloading, no MoE tricks. It is a 7B, so it will not
-  out-think the 24B it ultimately replaces on hard problems; it wins on
-  speed (roughly 90-110 tok/s on this card) and on being the top
-  independently scored model in its size tier.
+  Models, September 2026). At Q5_K_M it is ~6.6GB, so it loads entirely
+  into the 7900 GRE's 16GB of VRAM with room for a 64K context, a q8_0
+  KV cache, and a 0.9B draft model for speculative decoding. No CPU
+  offloading, no MoE tricks. It is a 7B, so it will not out-think the
+  24B it ultimately replaces on hard problems; it wins on speed (roughly
+  90-110 tok/s at short context on this card, less deep into long agent
+  sessions) and on being the top independently scored model in its
+  size tier.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
@@ -47,7 +49,7 @@
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\local-agent",
     # Any llama.cpp -hf repo:quant works here.
-    [string]$ModelRepo   = "IFM/K2-Horizon-7B-GGUF:Q4_K_M",
+    [string]$ModelRepo   = "IFM/K2-Horizon-7B-GGUF:Q5_K_M",
     [string]$ModelAlias  = "k2-horizon-7b",
     [int]$Port           = 8080,
     [switch]$SkipComputerUse
@@ -183,6 +185,27 @@ Refresh-Path
 
 # ------------------------------------------------- model prefetch + smoke test
 Step 'Model prefetch and server smoke test'
+# Optional speed flags, probed against this build's --help (same approach
+# as start-coding.ps1): speculative decoding with the 0.9B draft model,
+# ngram fallback, and no-reasoning-preserve when the build offers them.
+$extraArgs = @()
+try {
+    $ErrorActionPreference = 'Continue'
+    $helpText = (& $ServerExe --help 2>&1 | Out-String)
+} catch { $helpText = '' }
+$ErrorActionPreference = 'Stop'
+if ($helpText -match 'hf-repo-draft') {
+    $extraArgs += @('--spec-type', 'draft-simple',
+                    '--hf-repo-draft', 'IFM/K2-Horizon-0.9B-GGUF:Q4_K_M',
+                    '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
+    Note 'Speculative decoding available: draft model will be fetched with the main model.'
+} elseif ($helpText -match 'ngram-mod') {
+    $extraArgs += @('--spec-type', 'ngram-mod')
+    Note 'Speculative decoding available (ngram mode).'
+}
+if ($helpText -match 'no-reasoning-preserve') {
+    $extraArgs += '--no-reasoning-preserve'
+}
 $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,
@@ -190,10 +213,11 @@ $serverArgs = @(
     '-c', '65536', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
+    '-ub', '1024',
     '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0', '--no-mmproj', '--parallel', '1'
-)
+) + $extraArgs
 $serverLog = Join-Path $LogDir 'llama-server-first-run.log'
-Note "Starting llama-server to download the model (this is the big one, ~6GB)..."
+Note "Starting llama-server to download the model (this is the big one, ~7GB)..."
 Note "Live download progress: $serverLog"
 $proc = Start-Process -FilePath $ServerExe -ArgumentList $serverArgs -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err"

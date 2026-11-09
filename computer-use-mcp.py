@@ -77,7 +77,13 @@ def screen_size():
 
 
 def take_screenshot():
-    """Return (png_bytes, width, height) for the primary display."""
+    """Return (png_bytes, width, height) for the primary display.
+
+    width/height are the REAL screen size, used to map the model's
+    0-1000 coordinates back to pixels. The PNG itself is downscaled to
+    at most MAX_IMAGE_WIDTH wide: vision models tokenize images in
+    tiles, so a full 1080p frame costs far more tokens and latency for
+    no grounding accuracy the model can actually use."""
     require_windows()
     width, height = screen_size()
     SRCCOPY = 0x00CC0020
@@ -106,7 +112,32 @@ def take_screenshot():
         gdi32.DeleteObject(hbmp)
         gdi32.DeleteDC(hdc_mem)
         user32.ReleaseDC(None, hdc_screen)
-    return _png_from_bgra(raw, width, height), width, height
+    return _screenshot_png(raw, width, height), width, height
+
+
+MAX_IMAGE_WIDTH = 1344
+
+
+def _downscale_bgra(buf, width, height, new_width, new_height):
+    """Nearest-neighbor downscale of a top-down BGRA frame."""
+    out = bytearray(new_width * new_height * 4)
+    for y in range(new_height):
+        src_row = (y * height // new_height) * width * 4
+        dst_row = y * new_width * 4
+        for x in range(new_width):
+            s = src_row + (x * width // new_width) * 4
+            d = dst_row + x * 4
+            out[d:d + 4] = buf[s:s + 4]
+    return bytes(out)
+
+
+def _screenshot_png(raw, width, height):
+    if width > MAX_IMAGE_WIDTH:
+        new_width = MAX_IMAGE_WIDTH
+        new_height = max(1, round(height * new_width / width))
+        raw = _downscale_bgra(raw, width, height, new_width, new_height)
+        width, height = new_width, new_height
+    return _png_from_bgra(raw, width, height)
 
 
 def _png_from_bgra(buf, width, height):

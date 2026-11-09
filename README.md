@@ -3,7 +3,7 @@
 A fully local agentic coding setup for the RX 7900 GRE:
 
 - **llama.cpp** (Vulkan build) serves the model. Vulkan is the reliable path on AMD consumer cards on Windows.
-- **K2 Horizon 7B** (dense, Q4_K_M, ~5.6GB) does the coding. It is a September 2026 model from MBZUAI's Institute of Foundation Models, the top independently scored model in the 8-16GB tier, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
+- **K2 Horizon 7B** (dense, Q5_K_M, ~6.6GB) does the coding. It is a September 2026 model from MBZUAI's Institute of Foundation Models, the top independently scored model in the 8-16GB tier, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
 - **OpenCode** is the harness: agent loop, file edits, shell, sub-agents.
 - **Browser use** comes from two MCP servers wired into OpenCode: Playwright MCP and Chrome DevTools MCP.
 - **Computer use** is wired into OpenCode through a local MCP bridge (`computer-use-mcp.py`, Python stdlib only): the agent screenshots the desktop, a locally served UI-TARS vision model finds the elements, and the bridge clicks and types. UI-TARS Desktop is also included for standalone use.
@@ -36,9 +36,10 @@ Two ways to use it:
 
 ## The 16GB fit, in numbers
 
-- K2 Horizon 7B at Q4_K_M is ~5.6GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q8_0. Nothing runs on the CPU.
-- Both servers at once also fits: ~5.6GB coder + ~5GB UI-TARS vision model + caches stays inside 16GB, with some slowdown while both are busy.
-- Expect roughly 90 to 110 tok/s generation. Dense speed is basically memory bandwidth divided by model size, and 7B reads very little per token.
+- K2 Horizon 7B at Q5_K_M is ~6.6GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q8_0. Nothing runs on the CPU.
+- Both servers at once also fits: ~6.6GB coder + ~0.7GB draft model + ~5GB UI-TARS vision model + caches stays inside 16GB, with some slowdown while both are busy. The vision server runs an 8K context and the bridge downscales screenshots to 1344 wide before sending them, so computer-use calls stay cheap.
+- Speculative decoding is on: the same-family K2 0.9B drafts tokens and the 7B verifies them in batches, worth roughly 1.5-2.5x on code generation. The start scripts probe the llama.cpp build's `--help` before adding the flags (ngram speculation as fallback), so an engine update cannot break startup. The model's old reasoning is also not preserved into later turns (`--no-reasoning-preserve`), which keeps long agent sessions from bloating.
+- Raw generation is roughly 90 to 110 tok/s at short context; deep into a long session (50K+ tokens of context) expect more like 35 to 60, because every new token re-reads the whole KV cache.
 - Prompt processing is AMD's weak side (about 3x slower than NVIDIA), so very long contexts take a while to load. 64K context is the default; edit `-c` in start-coding.ps1 if you need 128K.
 - Try a different model: pass `-ModelRepo` to the setup script, or edit the `-hf` line in start-coding.ps1. Any `repo:quant` on Hugging Face works. Keep the `--alias` and the opencode.json model key in sync. (The strongest alternative that still fully fits is the same model at Q5_K_M if you trim context, or Qwen 3.6 27B at Q3_K_M.)
 

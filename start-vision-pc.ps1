@@ -48,7 +48,8 @@ Write-Host ''
     -hf $ModelRepo `
     --alias $ModelAlias `
     --host 0.0.0.0 --port $Port `
-    -c 32768 --jinja `
+    -c 8192 --jinja `
     -ngl 99 `
     -fa on `
+    --cache-type-k q4_0 --cache-type-v q4_0 `
     --api-key $ApiKey
