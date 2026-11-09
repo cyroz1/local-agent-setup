@@ -354,7 +354,7 @@ $config = @'
   "autoupdate": false,
   "model": "llama.cpp/k2-horizon-7b",
   "small_model": "llama.cpp/k2-horizon-7b",
-  "enabled_providers": ["llama.cpp"],
+  "enabled_providers": ["llama.cpp", "opencode"],
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
