@@ -349,10 +349,33 @@ if (Test-Path $ConfigPath) {
     Copy-Item $ConfigPath $backup
     Note "Existing opencode.json backed up to $backup"
 }
+# Agent shell: models are trained overwhelmingly on bash and kept
+# writing it inside PowerShell (2>/dev/null, &&, backslash paths), so
+# the agent gets Git Bash as its shell tool through the config's
+# "shell" key (same reason Claude Code uses Git Bash on Windows).
+# Amir's own interactive PowerShell is untouched. If Git Bash cannot
+# be found, the key is omitted and OpenCode's default shell applies.
+$ShellExe = $null
+$bashCandidates = @()
+$gitCmd = Get-Command git -ErrorAction SilentlyContinue
+if ($gitCmd) { $bashCandidates += (Join-Path (Split-Path (Split-Path $gitCmd.Source -Parent) -Parent) 'bin\bash.exe') }
+$bashCandidates += 'C:\Program Files\Git\bin\bash.exe'
+$bashCandidates += (Join-Path $env:LOCALAPPDATA 'Programs\Git\bin\bash.exe')
+foreach ($candidate in $bashCandidates) {
+    if ($candidate -and (Test-Path $candidate)) { $ShellExe = $candidate; break }
+}
+$shellLine = ''
+if ($ShellExe) {
+    $shellLine = '  "shell": "' + $ShellExe.Replace('\', '/') + '",'
+    Note "Agent shell: Git Bash ($ShellExe)"
+} else {
+    Warn 'Git Bash not found; the agent will use OpenCode''s default shell (PowerShell).'
+}
 $config = @'
 {
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
+__SHELL_LINE__
   "model": "llama.cpp/k2-horizon-7b",
   "small_model": "llama.cpp/k2-horizon-7b",
   "enabled_providers": ["llama.cpp", "opencode"],
@@ -390,6 +413,7 @@ $config = @'
 '@
 $bridgePathJson = $BridgePath.Replace('\', '\\')
 $config = $config.Replace('__BRIDGE_PATH__', $bridgePathJson)
+$config = $config.Replace('__SHELL_LINE__', $shellLine)
 Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 # Re-write without a BOM: some JSON parsers choke on one, and PS 5.1 adds it.
 [IO.File]::WriteAllText($ConfigPath, $config, (New-Object Text.UTF8Encoding $false))
@@ -402,7 +426,10 @@ Step 'OpenCode global instructions (AGENTS.md: this machine''s shell rules)'
 # splitting work across shell calls that share no state (each call is a
 # fresh PowerShell process). Telling it the environment's facts up
 # front is cheaper than letting it rediscover them by looping.
-$AgentsSource = Join-Path $PSScriptRoot 'global-agents.md'
+# The house rules match the agent's shell: the Git Bash edition when
+# the shell key was set above, the PowerShell edition otherwise.
+if ($ShellExe) { $AgentsSource = Join-Path $PSScriptRoot 'global-agents-bash.md' }
+else { $AgentsSource = Join-Path $PSScriptRoot 'global-agents.md' }
 $AgentsPath = Join-Path $ConfigDir 'AGENTS.md'
 if (Test-Path $AgentsSource) {
     if (Test-Path $AgentsPath) {
@@ -413,7 +440,7 @@ if (Test-Path $AgentsSource) {
     Copy-Item $AgentsSource $AgentsPath -Force
     Note "Wrote $AgentsPath"
 } else {
-    Warn 'global-agents.md not found next to the setup script; skipping global instructions.'
+    Warn "$(Split-Path $AgentsSource -Leaf) not found next to the setup script; skipping global instructions."
 }
 
 Step 'Warming up the MCP servers (first npx download happens now, not mid-session)'
