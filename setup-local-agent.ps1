@@ -400,6 +400,27 @@ Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 [IO.File]::WriteAllText($ConfigPath, $config, (New-Object Text.UTF8Encoding $false))
 Note "Wrote $ConfigPath"
 
+Step 'OpenCode global instructions (AGENTS.md: this machine''s shell rules)'
+# OpenCode loads ~/.config/opencode/AGENTS.md into every session. The
+# rules in global-agents.md (next to this script) exist because of live
+# loops on 2026-11-09: the model kept re-running identical commands and
+# splitting work across shell calls that share no state (each call is a
+# fresh PowerShell process). Telling it the environment's facts up
+# front is cheaper than letting it rediscover them by looping.
+$AgentsSource = Join-Path $PSScriptRoot 'global-agents.md'
+$AgentsPath = Join-Path $ConfigDir 'AGENTS.md'
+if (Test-Path $AgentsSource) {
+    if (Test-Path $AgentsPath) {
+        $agentsBackup = "$AgentsPath.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+        Copy-Item $AgentsPath $agentsBackup
+        Note "Existing AGENTS.md backed up to $agentsBackup"
+    }
+    Copy-Item $AgentsSource $AgentsPath -Force
+    Note "Wrote $AgentsPath"
+} else {
+    Warn 'global-agents.md not found next to the setup script; skipping global instructions.'
+}
+
 Step 'Warming up the MCP servers (first npx download happens now, not mid-session)'
 # Judge these by exit code, never by captured output: npm writes notice lines
 # to stderr, and with 2>&1 merged into the pipeline under

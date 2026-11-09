@@ -129,6 +129,23 @@ cat > "$CONFIG_PATH" <<JSON
 JSON
 note "Wrote $CONFIG_PATH"
 
+step "OpenCode global instructions (AGENTS.md)"
+# OpenCode loads ~/.config/opencode/AGENTS.md into every session. The
+# Mac variant next to this script carries this machine's shell rules
+# (fresh shell per call, no state between calls, no repeated
+# commands); see the file itself.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/global-agents-mac.md" ]; then
+  if [ -f "$CONFIG_DIR/AGENTS.md" ]; then
+    cp "$CONFIG_DIR/AGENTS.md" "$CONFIG_DIR/AGENTS.md.bak-$(date +%Y%m%d-%H%M%S)"
+    note "Existing AGENTS.md backed up."
+  fi
+  cp "$SCRIPT_DIR/global-agents-mac.md" "$CONFIG_DIR/AGENTS.md"
+  note "Wrote $CONFIG_DIR/AGENTS.md"
+else
+  warn "global-agents-mac.md not found next to this script; skipping global instructions."
+fi
+
 step "Warming up the MCP servers"
 for pkg in "@playwright/mcp@latest" "chrome-devtools-mcp@latest"; do
   if npx -y "$pkg" --version >/dev/null 2>&1; then
