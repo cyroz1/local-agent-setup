@@ -1,22 +1,22 @@
 <#
 .SYNOPSIS
-  Serves the UI-TARS 1.5 7B vision model locally so UI-TARS Desktop can do
-  computer use with zero cloud calls.
+  Serves the UI-TARS 1.5 7B vision model locally on port 8081. Two
+  consumers use this endpoint:
 
-  IMPORTANT, 16GB card reality check: stop the coding server first
-  (start-coding.ps1). The coder and the vision model do not run well at the
-  same time on 16GB of VRAM. Run one or the other.
+    * OpenCode's computer-use MCP bridge (the main way): the bridge
+      screenshots the desktop, sends the image here, and gets back
+      coordinates it clicks. This server just needs to be running.
+    * UI-TARS Desktop, standalone: point the app at this endpoint in its
+      settings (Base URL http://127.0.0.1:8081/v1, API key anything,
+      Model ui-tars-1.5-7b) and give it tasks in the app itself.
 
-  After this server is up:
-    1. Open UI-TARS Desktop.
-    2. In its settings, choose a custom / local VLM endpoint and enter:
-         Base URL : http://127.0.0.1:8081/v1
-         API key  : local   (anything non-empty works, the server ignores it)
-         Model    : ui-tars-1.5-7b
-    3. Give it a task in plain words. It sees screenshots and drives the
-       mouse and keyboard. Watch the first runs: local computer use is a
-       tier below the frontier cloud agents, fine for simple GUI tasks,
-       not something to leave unattended with anything destructive open.
+  16GB card note: the 7B coder (~5.6GB) and this vision model (~5GB) fit
+  at the same time, so both servers can stay up (start-agent.ps1 starts
+  both). Expect some slowdown while both are busy.
+
+  Watch the first runs either way: local computer use is a tier below the
+  frontier cloud agents, fine for simple GUI tasks, not something to
+  leave unattended with anything destructive open.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -32,12 +32,13 @@ if (-not (Test-Path $ServerExe)) {
     exit 1
 }
 
-# Warn if the coding server is holding the GPU.
+# The coding server being up at the same time is fine now (both models
+# fit in 16GB); it only costs some speed while both are busy.
 try {
     $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/health' -TimeoutSec 2
     if ($h.status -eq 'ok') {
-        Write-Host 'WARNING: the coding server is running on port 8080.' -ForegroundColor Yellow
-        Write-Host 'On a 16GB card, stop it first (close its window) or UI-TARS will crawl.'
+        Write-Host 'Note: the coding server is also running on port 8080.' -ForegroundColor Yellow
+        Write-Host 'That is fine (both models fit in 16GB); expect some slowdown while both are busy.'
         Write-Host ''
     }
 } catch { }

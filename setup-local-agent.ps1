@@ -17,11 +17,17 @@
        Hugging Face) and smoke-tests the server on http://127.0.0.1:8080.
     4. Installs OpenCode (npm) and writes a global opencode.json that points it
        at the local server and registers the Playwright + Chrome DevTools MCP
-       servers (browser use). An existing config is backed up, never clobbered.
-    5. Optional (-SkipComputerUse to skip): downloads the UI-TARS Desktop
-       installer and explains the computer-use pieces. The installer exe is
-       downloaded only, not auto-run, and the UI-TARS model is served on demand
-       by start-computer-use.ps1.
+       servers (browser use) and a local computer-use MCP bridge (see step 5).
+       An existing config is backed up, never clobbered.
+    5. Computer use, two forms. Installs Python (the bridge is stdlib-only)
+       and copies computer-use-mcp.py into $InstallRoot\mcp; OpenCode gets it
+       as the "computer-use" MCP server, so the coding model can screenshot
+       the desktop, find and click elements, type, and press keys. The seeing
+       is done by UI-TARS 1.5 7B served on port 8081 (start-computer-use.ps1);
+       the bridge hands the model coordinates and status text, never images.
+       Optional (-SkipComputerUse to skip): also downloads the UI-TARS
+       Desktop installer for standalone use. The installer exe is downloaded
+       only, not auto-run.
 
   The model is K2 Horizon 7B (dense, from MBZUAI's Institute of Foundation
   Models, September 2026). At Q4_K_M it is ~5.6GB, so it loads entirely
@@ -92,6 +98,34 @@ foreach ($pkg in @(@{ Id = 'Git.Git'; Cmd = 'git' }, @{ Id = 'OpenJS.NodeJS.LTS'
 Note "git  : $(git --version)"
 Note "node : $(node --version)"
 Note "npm  : $(npm --version)"
+
+# ---------------------------------------------------------------- Python
+# Only needed for the computer-use MCP bridge (stdlib-only script), so this
+# step is guarded: if Python cannot be installed, the rest of setup stands.
+Step 'Python (for the computer-use MCP bridge)'
+$pythonOk = $false
+$pyProbe = $null
+if (Test-Cmd 'python') {
+    try {
+        $ErrorActionPreference = 'Continue'
+        $pyProbe = python --version 2>&1
+    } catch { $pyProbe = $null }
+    $ErrorActionPreference = 'Stop'
+    if ("$pyProbe" -match 'Python 3') { $pythonOk = $true; Note "python already installed ($pyProbe), skipping." }
+}
+if (-not $pythonOk) {
+    Note 'Installing Python.Python.3.13...'
+    winget install --id Python.Python.3.13 -e --silent --accept-package-agreements --accept-source-agreements | Out-Host
+    Refresh-Path
+    try {
+        $ErrorActionPreference = 'Continue'
+        $pyProbe = python --version 2>&1
+    } catch { $pyProbe = $null }
+    $ErrorActionPreference = 'Stop'
+    if ("$pyProbe" -match 'Python 3') { $pythonOk = $true }
+}
+if ($pythonOk) { Note "python: $pyProbe" }
+else { Warn 'Python did not come up on PATH. The computer-use MCP bridge needs it; everything else still stands.' }
 
 # ---------------------------------------------------------------- llama.cpp
 Step 'llama.cpp (Vulkan build)'
@@ -252,6 +286,34 @@ $ErrorActionPreference = 'Stop'
 if (-not $finalProbe) { throw 'OpenCode is installed but still does not run. Open a new terminal and re-run this setup.' }
 Note "opencode: $finalProbe"
 
+# ------------------------------------------------- computer-use MCP bridge
+Step 'Computer-use MCP bridge (OpenCode drives the desktop via UI-TARS)'
+$McpDir = Join-Path $InstallRoot 'mcp'
+$BridgePath = Join-Path $McpDir 'computer-use-mcp.py'
+New-Item -ItemType Directory -Force -Path $McpDir | Out-Null
+try {
+    $localBridge = $null
+    if ($PSScriptRoot) { $localBridge = Join-Path $PSScriptRoot 'computer-use-mcp.py' }
+    if ($localBridge -and (Test-Path $localBridge)) {
+        Copy-Item $localBridge $BridgePath -Force
+        Note "Bridge copied to $BridgePath"
+    } else {
+        Note 'Bridge not found next to the setup script; downloading it from the repo...'
+        Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/cyroz1/local-agent-setup/main/computer-use-mcp.py' -OutFile $BridgePath -Headers @{ 'User-Agent' = 'local-agent-setup' }
+        Note "Bridge downloaded to $BridgePath"
+    }
+    if ($pythonOk -and (Test-Path $BridgePath)) {
+        $ErrorActionPreference = 'Continue'
+        python -m py_compile $BridgePath 1>$null 2>$null
+        $compileCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($compileCode -eq 0) { Note 'Bridge syntax check passed.' }
+        else { Warn 'Bridge syntax check failed; the computer-use tools may not load in OpenCode.' }
+    }
+} catch {
+    Warn "Computer-use bridge step failed ($($_.Exception.Message)). OpenCode still works; its computer-use tools just will not appear."
+}
+
 # ------------------------------------------------------- opencode.json config
 Step 'OpenCode config (provider + browser-use MCP servers)'
 $ConfigDir  = Join-Path $HOME '.config\opencode'
@@ -292,10 +354,21 @@ $config = @'
       "type": "local",
       "command": ["npx", "-y", "chrome-devtools-mcp@latest"],
       "enabled": true
+    },
+    "computer-use": {
+      "type": "local",
+      "command": ["python", "__BRIDGE_PATH__"],
+      "enabled": true,
+      "environment": {
+        "UITARS_BASE_URL": "http://127.0.0.1:8081/v1",
+        "UITARS_MODEL": "ui-tars-1.5-7b"
+      }
     }
   }
 }
 '@
+$bridgePathJson = $BridgePath.Replace('\', '\\')
+$config = $config.Replace('__BRIDGE_PATH__', $bridgePathJson)
 Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 # Re-write without a BOM: some JSON parsers choke on one, and PS 5.1 adds it.
 [IO.File]::WriteAllText($ConfigPath, $config, (New-Object Text.UTF8Encoding $false))
@@ -343,8 +416,9 @@ if (-not $SkipComputerUse) {
                 Invoke-WebRequest -Uri $exe.browser_download_url -OutFile $dest -Headers $headers
             }
             Note "UI-TARS Desktop installer saved to $dest"
-            Note 'It is NOT auto-installed. Run it once yourself, then use start-computer-use.ps1,'
-            Note 'which serves the UI-TARS vision model locally and prints the settings to paste in.'
+            Note 'It is NOT auto-installed, and it is optional now: OpenCode already has'
+            Note 'computer use through the MCP bridge. The Desktop app is the standalone'
+            Note 'alternative. Either way the vision model is served by start-computer-use.ps1.'
         } else {
             Warn 'No UI-TARS Setup exe found in the 30 most recent UI-TARS Desktop releases.'
             Note 'Grab it manually: https://github.com/bytedance/UI-TARS-desktop/releases'
@@ -370,7 +444,8 @@ Note "model cache  : $HOME\.cache\llama.cpp"
 Write-Host "`nDone. Next steps:" -ForegroundColor Green
 Write-Host '  1. Run .\start-coding.ps1 from any project folder, then run: opencode'
 Write-Host '  2. Browser use is already wired into OpenCode through the Playwright and Chrome DevTools MCP servers.'
-Write-Host '  3. Computer use: install UI-TARS Desktop from the downloads folder, then run .\start-computer-use.ps1'
+Write-Host '  3. Computer use from OpenCode: run .\start-agent.ps1 (starts BOTH model servers), then just ask the agent.'
+Write-Host '     Standalone alternative: install UI-TARS Desktop from the downloads folder, then run .\start-computer-use.ps1'
 Write-Host "Full log: $LogFile"
 
 } catch {
