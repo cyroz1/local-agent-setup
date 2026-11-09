@@ -2,7 +2,7 @@
 
 Same local stack as the all-in-one setup, split across two machines:
 
-- **PC (7900 GRE) = compute only.** llama.cpp serves Devstral Small 2 24B (dense, ~14GB at Q4_K_M, fully in VRAM) on port 8080, and UI-TARS 1.5 7B for computer use on port 8081. One at a time on a 16GB card.
+- **PC (7900 GRE) = compute only.** llama.cpp serves Qwen2.5-Coder 14B (dense, ~9GB at Q4_K_M, fully in VRAM) on port 8080, and UI-TARS 1.5 7B for computer use on port 8081. One at a time on a 16GB card.
 - **M4 Air = frontend and control.** OpenCode runs here and talks to the PC over the network. The browser-use MCP servers (Playwright, Chrome DevTools) also run here, so the agent drives the Mac's browsers. UI-TARS Desktop runs here too; only its vision model lives on the PC.
 
 Nothing leaves your network. The PC servers require an API key that the PC setup generates (`%LOCALAPPDATA%\local-agent\api-key.txt`), and the PC firewall rule is scoped to the Private profile. Do not port-forward 8080/8081 on your router. For access away from home, put both machines on Tailscale and use the PC's Tailscale address (100.x) instead of the LAN address; the PC setup prints it if one exists.

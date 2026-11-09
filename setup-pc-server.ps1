@@ -28,8 +28,8 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\local-agent",
-    [string]$ModelRepo   = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M",
-    [string]$ModelAlias  = "devstral-small-2"
+    [string]$ModelRepo   = "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M",
+    [string]$ModelAlias  = "qwen2.5-coder-14b"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,7 +52,7 @@ Note "GPU(s): $($gpus -join ', ')"
 $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($InstallRoot).Substring(0,1))
 $freeGb = [math]::Round($drive.Free / 1GB, 1)
 Note "Free space on install drive: $freeGb GB"
-if ($freeGb -lt 30) { Warn 'Under 30GB free. The coder model is ~14GB and the vision model ~5GB.' }
+if ($freeGb -lt 30) { Warn 'Under 30GB free. The coder model is ~9GB and the vision model ~5GB.' }
 
 # ---------------------------------------------------------------- llama.cpp
 Step 'llama.cpp (Vulkan build)'
@@ -118,14 +118,14 @@ $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,
     '--host', '0.0.0.0', '--port', '8080',
-    '-c', '32768', '--jinja',
+    '-c', '65536', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
     '--cache-type-k', 'q4_0', '--cache-type-v', 'q4_0', '--no-mmproj', '--parallel', '1',
     '--api-key', $ApiKey
 )
 $serverLog = Join-Path $LogDir 'pc-server-first-run.log'
-Note 'Starting llama-server to download the model (~14GB, first run only)...'
+Note 'Starting llama-server to download the model (~9GB, first run only)...'
 $proc = Start-Process -FilePath $ServerExe -ArgumentList $serverArgs -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err"
 try {

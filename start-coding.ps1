@@ -5,13 +5,14 @@
   Then, in your project folder, run:  opencode
 
   Tuning notes:
-    The model is dense 24B at Q4_K_M (~14GB), so -ngl 99 puts every layer
+    The model is dense 14B at Q4_K_M (~9GB), so -ngl 99 puts every layer
     on the GPU and there is still room for the 64K context below. Nothing
     is offloaded to the CPU.
-    -c 32768      context size, with the KV cache at q4_0 and one slot.
-                  This matters: at 64K with a q8_0 cache the KV cache alone
-                  was ~5GB, which pushed the model partly off the GPU and
-                  tanked speed. 32K/q4_0 keeps everything in VRAM.
+    -c 65536      context size, KV cache at q4_0 (~2.8GB at 64K), one slot.
+                  Cache size is what decides whether everything stays in
+                  VRAM: with the old 24B model a big cache pushed layers
+                  into system RAM and killed speed. At 14B there is room
+                  to spare, so the full 64K is back.
     --no-mmproj   skips the vision projector (about 1GB); pointless for code.
     --spec-type   add "--spec-type ngram-mod" if your llama.cpp build supports
                   it; it speeds up agentic and code-completion style output.
@@ -21,8 +22,8 @@ $ErrorActionPreference = 'Stop'
 
 $InstallRoot = "$env:LOCALAPPDATA\local-agent"
 $ServerExe   = Join-Path $InstallRoot 'llama.cpp\llama-server.exe'
-$ModelRepo   = 'unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M'
-$ModelAlias  = 'devstral-small-2'
+$ModelRepo   = 'Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M'
+$ModelAlias  = 'qwen2.5-coder-14b'
 $Port        = 8080
 
 if (-not (Test-Path $ServerExe)) {
@@ -47,7 +48,7 @@ Write-Host ''
     -hf $ModelRepo `
     --alias $ModelAlias `
     --host 127.0.0.1 --port $Port `
-    -c 32768 --jinja `
+    -c 65536 --jinja `
     -ngl 99 `
     -fa on `
     --cache-type-k q4_0 --cache-type-v q4_0 --no-mmproj --parallel 1

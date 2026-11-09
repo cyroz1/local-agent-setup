@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Local agentic coding stack for a 16GB AMD card (RX 7900 GRE class):
-  llama.cpp (Vulkan) + Devstral Small 2 24B (dense) + OpenCode + browser-use
+  llama.cpp (Vulkan) + Qwen2.5-Coder 14B (dense) + OpenCode + browser-use
   MCP servers + optional UI-TARS computer use.
 
 .DESCRIPTION
@@ -13,7 +13,7 @@
     1. Installs Git and Node.js LTS via winget (skips whatever is already present).
     2. Downloads the latest llama.cpp Windows Vulkan build from GitHub and puts
        it in $InstallRoot\llama.cpp (added to your user PATH).
-    3. Prefetches the coding model (first run of the server downloads ~14GB from
+    3. Prefetches the coding model (first run of the server downloads ~9GB from
        Hugging Face) and smoke-tests the server on http://127.0.0.1:8080.
     4. Installs OpenCode (npm) and writes a global opencode.json that points it
        at the local server and registers the Playwright + Chrome DevTools MCP
@@ -23,10 +23,11 @@
        downloaded only, not auto-run, and the UI-TARS model is served on demand
        by start-computer-use.ps1.
 
-  The model is Devstral Small 2 (24B, dense, built by Mistral specifically
-  for agentic coding). At Q4_K_M it is ~14GB, so it loads entirely into the
-  7900 GRE's 16GB of VRAM with room left for context. No CPU offloading,
-  no MoE tricks.
+  The model is Qwen2.5-Coder-14B-Instruct (dense, built by the Qwen team
+  specifically for coding). At Q4_K_M it is ~9GB, so it loads entirely into
+  the 7900 GRE's 16GB of VRAM with room for a 64K context. No CPU offloading,
+  no MoE tricks. (It replaced Devstral Small 2 24B, which was stronger but
+  roughly half the speed on this card.)
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
@@ -38,8 +39,8 @@
 param(
     [string]$InstallRoot = "$env:LOCALAPPDATA\local-agent",
     # Any llama.cpp -hf repo:quant works here.
-    [string]$ModelRepo   = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF:Q4_K_M",
-    [string]$ModelAlias  = "devstral-small-2",
+    [string]$ModelRepo   = "Qwen/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M",
+    [string]$ModelAlias  = "qwen2.5-coder-14b",
     [int]$Port           = 8080,
     [switch]$SkipComputerUse
 )
@@ -73,7 +74,7 @@ Note "GPU(s): $($gpus -join ', ')"
 $drive = Get-PSDrive -Name ([IO.Path]::GetPathRoot($InstallRoot).Substring(0,1))
 $freeGb = [math]::Round($drive.Free / 1GB, 1)
 Note "Free space on install drive: $freeGb GB"
-if ($freeGb -lt 30) { Warn "Under 30GB free. The coder model alone is ~14GB, UI-TARS adds ~5GB. Free space or pass -InstallRoot on a bigger drive." }
+if ($freeGb -lt 30) { Warn "Under 30GB free. The coder model alone is ~9GB, UI-TARS adds ~5GB. Free space or pass -InstallRoot on a bigger drive." }
 
 # ---------------------------------------------------------------- winget apps
 Step 'Git and Node.js (winget)'
@@ -150,13 +151,13 @@ $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,
     '--host', '127.0.0.1', '--port', "$Port",
-    '-c', '32768', '--jinja',
+    '-c', '65536', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
     '--cache-type-k', 'q4_0', '--cache-type-v', 'q4_0', '--no-mmproj', '--parallel', '1'
 )
 $serverLog = Join-Path $LogDir 'llama-server-first-run.log'
-Note "Starting llama-server to download the model (this is the big one, ~14GB)..."
+Note "Starting llama-server to download the model (this is the big one, ~9GB)..."
 Note "Live download progress: $serverLog"
 $proc = Start-Process -FilePath $ServerExe -ArgumentList $serverArgs -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err"
@@ -263,8 +264,8 @@ $config = @'
 {
   "$schema": "https://opencode.ai/config.json",
   "autoupdate": false,
-  "model": "llama.cpp/devstral-small-2",
-  "small_model": "llama.cpp/devstral-small-2",
+  "model": "llama.cpp/qwen2.5-coder-14b",
+  "small_model": "llama.cpp/qwen2.5-coder-14b",
   "enabled_providers": ["llama.cpp"],
   "provider": {
     "llama.cpp": {
@@ -272,9 +273,9 @@ $config = @'
       "name": "llama.cpp (local)",
       "options": { "baseURL": "http://127.0.0.1:8080/v1" },
       "models": {
-        "devstral-small-2": {
-          "name": "Devstral Small 2 24B (local)",
-          "limit": { "context": 32768, "output": 8192 }
+        "qwen2.5-coder-14b": {
+          "name": "Qwen2.5-Coder 14B (local)",
+          "limit": { "context": 65536, "output": 8192 }
         }
       }
     }

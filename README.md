@@ -3,7 +3,7 @@
 A fully local agentic coding setup for the RX 7900 GRE:
 
 - **llama.cpp** (Vulkan build) serves the model. Vulkan is the reliable path on AMD consumer cards on Windows.
-- **Devstral Small 2 24B** (dense, Q4_K_M, ~14GB) does the coding. It is Mistral's model built specifically for agentic coding, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
+- **Qwen2.5-Coder 14B** (dense, Q4_K_M, ~9GB) does the coding. It is the Qwen team's model built specifically for coding, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
 - **OpenCode** is the harness: agent loop, file edits, shell, sub-agents.
 - **Browser use** comes from two MCP servers wired into OpenCode: Playwright MCP and Chrome DevTools MCP.
 - **Computer use** is UI-TARS Desktop driving its own 7B vision model, also served locally by llama.cpp.
@@ -11,7 +11,7 @@ A fully local agentic coding setup for the RX 7900 GRE:
 ## Run it
 
 ```powershell
-# one time (downloads ~14GB of model, logs everything, safe to re-run)
+# one time (downloads ~9GB of model, logs everything, safe to re-run)
 powershell -ExecutionPolicy Bypass -File .\setup-local-agent.ps1
 
 # every work session: start the model server, leave the window open
@@ -31,8 +31,8 @@ Skip the computer-use download during setup with `-SkipComputerUse`.
 
 ## The 16GB fit, in numbers
 
-- Devstral Small 2 at Q4_K_M is ~14GB of weights. `-ngl 99` puts every layer on the GPU, and the remaining ~2GB covers the KV cache at 64K context with the cache quantized to q8_0. Nothing runs on the CPU.
-- Expect roughly 30 to 40 tok/s generation. Dense models read every weight for every token, so they are slower per token than an MoE of the same size. That is the price of the full fit.
+- Qwen2.5-Coder-14B at Q4_K_M is ~9GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q4_0 (~2.8GB). Nothing runs on the CPU.
+- Expect roughly 55 to 70 tok/s generation. Dense speed is basically memory bandwidth divided by model size, so the 14B is about twice as fast per token as the 24B it replaced.
 - Prompt processing is AMD's weak side (about 3x slower than NVIDIA), so very long contexts take a while to load. 64K context is the default; edit `-c` in start-coding.ps1 if you need 128K.
 - Try a different model: pass `-ModelRepo` to the setup script, or edit the `-hf` line in start-coding.ps1. Any `repo:quant` on Hugging Face works. Keep the `--alias` and the opencode.json model key in sync. (The strongest alternative that still fully fits is the same model at Q5_K_M if you trim context, or Qwen 3.6 27B at Q3_K_M.)
 
