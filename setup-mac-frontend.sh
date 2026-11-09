@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+#
+# Split setup, Mac side: this M4 Air is the frontend and control machine.
+# The PC does all the model compute. This script:
+#   1. Checks it can actually reach the PC's model server before changing anything.
+#   2. Installs Node (via Homebrew) and OpenCode.
+#   3. Writes ~/.config/opencode/opencode.json pointing at the PC, with the
+#      Playwright + Chrome DevTools MCP servers (browser use runs here,
+#      against your Mac's browsers).
+#   4. Downloads the UI-TARS Desktop app (computer use UI runs here, its
+#      vision model is served by the PC on port 8081).
+#
+# Usage:
+#   ./setup-mac-frontend.sh <pc-address> <api-key>
+# <pc-address> is the PC's LAN IP (e.g. 192.168.1.50) or its Tailscale
+# address/name. Both values are printed by setup-pc-server.ps1 on the PC.
+#
+# Idempotent and logged. Optional steps are guarded individually.
+
+set -uf -o pipefail
+
+PC_HOST="${1:-${PC_HOST:-}}"
+API_KEY="${2:-${API_KEY:-}}"
+CODING_PORT=8080
+VISION_PORT=8081
+LOG_FILE="$HOME/local-agent-frontend-setup.log"
+
+step() { printf '\n=== %s ===\n' "$1"; }
+note() { printf '  %s\n' "$1"; }
+warn() { printf '  WARNING: %s\n' "$1"; }
+die()  { printf '\nSETUP STOPPED: %s\n' "$1" >&2; printf 'Log: %s\n' "$LOG_FILE" >&2; exit 1; }
+
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+[ -n "$PC_HOST" ] && [ -n "$API_KEY" ] || die "Usage: ./setup-mac-frontend.sh <pc-address> <api-key>   (both are printed by setup-pc-server.ps1 on the PC)"
+
+step "Reachability check: PC model server at $PC_HOST:$CODING_PORT"
+note "If this fails: start start-server-pc.ps1 on the PC, confirm both machines"
+note "are on the same network, and check the firewall step in the PC setup log."
+HEALTH="$(curl -s -m 5 -H "Authorization: Bearer $API_KEY" "http://$PC_HOST:$CODING_PORT/health" || true)"
+case "$HEALTH" in
+  *'"status":"ok"'*|*'"status": "ok"'*) note "PC coding server is up and the key works." ;;
+  *) die "Could not reach a healthy model server at http://$PC_HOST:$CODING_PORT (got: ${HEALTH:-nothing}). Fix the PC side first, then re-run." ;;
+esac
+
+step "Homebrew, Node, OpenCode"
+if ! command -v brew >/dev/null 2>&1; then
+  note "Homebrew is not installed. It needs your password once, so it is the"
+  note "one manual step. Download its installer to a file and run that file:"
+  note "  curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh -o /tmp/brew-install.sh"
+  note "  /bin/bash /tmp/brew-install.sh"
+  note "Then re-run this script."
+  exit 2
+fi
+if ! command -v node >/dev/null 2>&1; then
+  note "Installing Node via Homebrew..."
+  brew install node || die "brew install node failed."
+fi
+note "node: $(node --version), npm: $(npm --version)"
+if ! command -v opencode >/dev/null 2>&1; then
+  note "Installing OpenCode..."
+  npm install -g opencode-ai || die "npm install -g opencode-ai failed."
+fi
+note "opencode: $(opencode --version)"
+
+step "OpenCode config (PC provider + browser-use MCP servers)"
+CONFIG_DIR="$HOME/.config/opencode"
+CONFIG_PATH="$CONFIG_DIR/opencode.json"
+mkdir -p "$CONFIG_DIR"
+if [ -f "$CONFIG_PATH" ]; then
+  BACKUP="$CONFIG_PATH.bak-$(date +%Y%m%d-%H%M%S)"
+  cp "$CONFIG_PATH" "$BACKUP"
+  note "Existing opencode.json backed up to $BACKUP"
+fi
+cat > "$CONFIG_PATH" <<JSON
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "model": "llama.cpp/devstral-small-2",
+  "small_model": "llama.cpp/devstral-small-2",
+  "enabled_providers": ["llama.cpp"],
+  "provider": {
+    "llama.cpp": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "PC llama.cpp (remote)",
+      "options": {
+        "baseURL": "http://$PC_HOST:$CODING_PORT/v1",
+        "apiKey": "$API_KEY"
+      },
+      "models": {
+        "devstral-small-2": {
+          "name": "Devstral Small 2 24B (on PC)",
+          "limit": { "context": 65536, "output": 8192 }
+        }
+      }
+    }
+  },
+  "mcp": {
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "enabled": true
+    },
+    "chrome-devtools": {
+      "type": "local",
+      "command": ["npx", "-y", "chrome-devtools-mcp@latest"],
+      "enabled": true
+    }
+  }
+}
+JSON
+note "Wrote $CONFIG_PATH"
+
+step "Warming up the MCP servers"
+for pkg in "@playwright/mcp@latest" "chrome-devtools-mcp@latest"; do
+  if npx -y "$pkg" --version >/dev/null 2>&1; then
+    note "$pkg ready."
+  else
+    warn "$pkg warm-up failed. It will retry on first use inside OpenCode."
+  fi
+done
+if npx -y playwright@latest install chromium >/dev/null 2>&1; then
+  note "Playwright Chromium installed."
+else
+  warn "Playwright Chromium install failed. The MCP can also drive your installed Chrome."
+fi
+if [ ! -d "/Applications/Google Chrome.app" ]; then
+  warn "Google Chrome is not in /Applications. chrome-devtools-mcp needs Chrome; install it or rely on the Playwright MCP."
+fi
+
+step "Computer use: UI-TARS Desktop (optional, guarded)"
+TARS_DIR="$HOME/Downloads"
+API_JSON="$(curl -s -m 20 -H 'User-Agent: local-agent-setup' https://api.github.com/repos/bytedance/UI-TARS-desktop/releases/latest || true)"
+DMG_URL="$(printf '%s' "$API_JSON" | grep -oE 'https://[^"]+\.dmg' | grep -iE 'arm64|aarch64|darwin|mac' | head -n 1 || true)"
+if [ -z "$DMG_URL" ]; then
+  DMG_URL="$(printf '%s' "$API_JSON" | grep -oE 'https://[^"]+\.dmg' | head -n 1 || true)"
+fi
+if [ -n "$DMG_URL" ]; then
+  DMG_FILE="$TARS_DIR/$(basename "$DMG_URL")"
+  if [ ! -f "$DMG_FILE" ]; then
+    note "Downloading UI-TARS Desktop: $DMG_URL"
+    curl -fL -o "$DMG_FILE" "$DMG_URL" || warn "UI-TARS download failed."
+  fi
+  [ -f "$DMG_FILE" ] && note "Saved to $DMG_FILE. Open it and drag UI-TARS Desktop into Applications."
+else
+  warn "Could not find a macOS .dmg on the latest UI-TARS Desktop release."
+  note "Manual route: https://github.com/bytedance/UI-TARS-desktop/releases"
+fi
+note "In UI-TARS Desktop settings, use the custom VLM endpoint:"
+note "  Base URL : http://$PC_HOST:$VISION_PORT/v1"
+note "  API key  : (the same key you passed to this script)"
+note "  Model    : ui-tars-1.5-7b"
+note "And start start-vision-pc.ps1 on the PC first (stop the coding server before it, 16GB card)."
+
+step "Sanity check"
+MODELS="$(curl -s -m 5 -H "Authorization: Bearer $API_KEY" "http://$PC_HOST:$CODING_PORT/v1/models" || true)"
+case "$MODELS" in
+  *devstral-small-2*) note "PC is serving devstral-small-2. You are set." ;;
+  *) warn "Could not confirm the model list from the PC (got: ${MODELS:-nothing}). OpenCode will surface any connection problem on first run." ;;
+esac
+printf '\nDone. Run:  opencode   in any project folder on this Mac.\n'
+printf 'Log: %s\n' "$LOG_FILE"
