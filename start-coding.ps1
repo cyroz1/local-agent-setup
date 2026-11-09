@@ -10,11 +10,14 @@
     -c 65536      context size, KV cache at q8_0, one slot. Cache size is
                   what decides whether everything stays in VRAM; at this
                   model size there is room to spare even at 64K.
-    Speculative   a same-family 0.9B draft model proposes tokens and the
-    decoding      7B verifies them in batches (biggest single speed win,
-                  ~1.5-2.5x on code). The flags are probed against this
-                  build's --help first, with an ngram fallback, so an
-                  llama.cpp update can never break startup over them.
+    Speculative   n-gram speculation: the server reuses patterns from the
+    decoding      context itself to draft tokens and the 7B verifies them
+                  in batches (biggest single speed win on code, ~1.5-2x).
+                  A draft-model variant exists but the K2 0.9B GGUF's
+                  tokenizer metadata fails llama.cpp's vocab check
+                  against the 7B, so ngram is the working route. The
+                  flags are probed against this build's --help first,
+                  so an llama.cpp update can never break startup.
     -ub 1024      bigger prompt micro-batch: faster prompt processing,
                   which is the AMD weak side.
     --no-mmproj   skips the vision projector (about 1GB); pointless for code.
@@ -59,14 +62,18 @@ try {
     $helpText = (& $ServerExe --help 2>&1 | Out-String)
 } catch { $helpText = '' }
 $ErrorActionPreference = 'Stop'
-if ($helpText -match 'hf-repo-draft') {
+# ngram first, draft model only as fallback: the K2 0.9B GGUF's tokenizer
+# metadata does not match the 7B's (bos/vocab check), and llama.cpp
+# refuses draft speculation for the pair (verified on this machine,
+# 2026-11-09). Ngram speculation needs no second model at all.
+if ($helpText -match 'ngram-mod') {
+    $extraArgs += @('--spec-type', 'ngram-mod')
+    Write-Host 'Speculative decoding: on (ngram, no draft model)'
+} elseif ($helpText -match 'hf-repo-draft') {
     $extraArgs += @('--spec-type', 'draft-simple',
                     '--hf-repo-draft', 'IFM/K2-Horizon-0.9B-GGUF:Q4_K_M',
                     '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
     Write-Host 'Speculative decoding: on (K2 0.9B draft model, first run downloads ~0.7GB)'
-} elseif ($helpText -match 'ngram-mod') {
-    $extraArgs += @('--spec-type', 'ngram-mod')
-    Write-Host 'Speculative decoding: on (ngram, no draft model)'
 }
 if ($helpText -match 'no-reasoning-preserve') {
     $extraArgs += '--no-reasoning-preserve'

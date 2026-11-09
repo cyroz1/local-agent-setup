@@ -43,14 +43,18 @@ try {
     $helpText = (& $ServerExe --help 2>&1 | Out-String)
 } catch { $helpText = '' }
 $ErrorActionPreference = 'Stop'
-if ($helpText -match 'hf-repo-draft') {
+# ngram first, draft model only as fallback: the K2 0.9B GGUF's tokenizer
+# metadata does not match the 7B's (bos/vocab check), and llama.cpp
+# refuses draft speculation for the pair (verified 2026-11-09). Ngram
+# speculation needs no second model at all.
+if ($helpText -match 'ngram-mod') {
+    $extraArgs += @('--spec-type', 'ngram-mod')
+    Write-Host 'Speculative decoding: on (ngram, no draft model)'
+} elseif ($helpText -match 'hf-repo-draft') {
     $extraArgs += @('--spec-type', 'draft-simple',
                     '--hf-repo-draft', 'IFM/K2-Horizon-0.9B-GGUF:Q4_K_M',
                     '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
     Write-Host 'Speculative decoding: on (K2 0.9B draft model)'
-} elseif ($helpText -match 'ngram-mod') {
-    $extraArgs += @('--spec-type', 'ngram-mod')
-    Write-Host 'Speculative decoding: on (ngram, no draft model)'
 }
 if ($helpText -match 'no-reasoning-preserve') {
     $extraArgs += '--no-reasoning-preserve'

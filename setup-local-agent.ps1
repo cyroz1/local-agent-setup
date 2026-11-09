@@ -32,7 +32,7 @@
   The model is K2 Horizon 7B (dense, from MBZUAI's Institute of Foundation
   Models, September 2026). At Q5_K_M it is ~6.6GB, so it loads entirely
   into the 7900 GRE's 16GB of VRAM with room for a 64K context, a q8_0
-  KV cache, and a 0.9B draft model for speculative decoding. No CPU
+  KV cache, and n-gram speculative decoding. No CPU
   offloading, no MoE tricks. It is a 7B, so it will not out-think the
   24B it ultimately replaces on hard problems; it wins on speed (roughly
   90-110 tok/s at short context on this card, less deep into long agent
@@ -186,22 +186,23 @@ Refresh-Path
 # ------------------------------------------------- model prefetch + smoke test
 Step 'Model prefetch and server smoke test'
 # Optional speed flags, probed against this build's --help (same approach
-# as start-coding.ps1): speculative decoding with the 0.9B draft model,
-# ngram fallback, and no-reasoning-preserve when the build offers them.
+# as start-coding.ps1): ngram speculative decoding (the K2 0.9B draft
+# model is unusable, its tokenizer metadata fails llama.cpp's vocab
+# check against the 7B), and no-reasoning-preserve when offered.
 $extraArgs = @()
 try {
     $ErrorActionPreference = 'Continue'
     $helpText = (& $ServerExe --help 2>&1 | Out-String)
 } catch { $helpText = '' }
 $ErrorActionPreference = 'Stop'
-if ($helpText -match 'hf-repo-draft') {
+if ($helpText -match 'ngram-mod') {
+    $extraArgs += @('--spec-type', 'ngram-mod')
+    Note 'Speculative decoding available (ngram mode).'
+} elseif ($helpText -match 'hf-repo-draft') {
     $extraArgs += @('--spec-type', 'draft-simple',
                     '--hf-repo-draft', 'IFM/K2-Horizon-0.9B-GGUF:Q4_K_M',
                     '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
     Note 'Speculative decoding available: draft model will be fetched with the main model.'
-} elseif ($helpText -match 'ngram-mod') {
-    $extraArgs += @('--spec-type', 'ngram-mod')
-    Note 'Speculative decoding available (ngram mode).'
 }
 if ($helpText -match 'no-reasoning-preserve') {
     $extraArgs += '--no-reasoning-preserve'
