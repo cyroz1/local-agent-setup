@@ -31,6 +31,12 @@ Two ways to use it:
 
 **Standalone (UI-TARS Desktop).** Run the installer from `%LOCALAPPDATA%\local-agent\downloads` (the setup script downloads it but does not auto-install it), run `.\start-computer-use.ps1`, and in the app's settings point it at the local endpoint: base URL `http://127.0.0.1:8081/v1`, model `ui-tars-1.5-7b`, any non-empty API key.
 
+## Phone remote control
+
+OpenCode is client-server, so your phone can drive the same sessions from a browser. With the model server running, run `.\start-remote.ps1` instead of opening OpenCode normally. It starts OpenCode headless on port 4096 behind a password (generated once, stored in `%LOCALAPPDATA%\local-agent\opencode-password.txt`), tries to open the firewall with the same scoping as the model server, and prints the URLs. On the phone: Tailscale app on, open the Tailscale URL, sign in as `opencode` with that password. You get the full interface — prompts, tool approvals, live output — while everything still executes on this PC. Desktop and phone can be attached to the same sessions at once.
+
+Rules: Tailscale (or home LAN) only. Never port-forward 4096 and never put it on Tailscale Funnel — that API can run shell commands, and basic auth is the only gate. Inside the tailnet the traffic is already WireGuard-encrypted.
+
 ## The 16GB fit, in numbers
 
 - K2 Horizon 7B at Q5_K_M is ~6.6GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q8_0. Nothing runs on the CPU.

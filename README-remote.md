@@ -35,6 +35,8 @@ The Mac script checks it can reach the PC before changing anything, so start the
 opencode
 ```
 
+Phone remote: on the Mac, run `./start-remote-mac.sh` instead of `opencode`. It starts OpenCode headless on port 4096 behind a password (generated once, stored in `~/.local-agent/opencode-password.txt`) and prints the URLs. On the phone: Tailscale app on, open the Mac's Tailscale URL, sign in as `opencode` with that password. The phone is a pure viewport — sessions, files, and tools stay on the Mac, the model stays on the PC. Tailscale or home LAN only: never port-forward 4096 or Funnel it, that API can run shell commands.
+
 Computer use: stop the coding server on the PC, run `.\start-vision-pc.ps1` there instead, then open UI-TARS Desktop on the Mac and point its custom VLM endpoint at `http://<pc-address>:8081/v1`, model `ui-tars-1.5-7b`, with the same API key.
 
 ## Troubleshooting
