@@ -78,6 +78,14 @@ if ($helpText -match 'ngram-mod') {
 if ($helpText -match 'no-reasoning-preserve') {
     $extraArgs += '--no-reasoning-preserve'
 }
+# Force K2's JSON tool-call format server-side. Its native XML format
+# intermittently leaks through llama.cpp's parser as raw <|ifm|> text,
+# which ends the agent's turn mid-task with no tool executed (seen live
+# 2026-11-09). JSON is the format llama.cpp parses reliably.
+if ($helpText -match 'chat-template-kwargs') {
+    $extraArgs += @('--chat-template-kwargs', '{"tool_call_format":"json"}')
+    Write-Host 'Tool call format: json (avoids raw XML tool-call leaks)'
+}
 
 & $ServerExe `
     -hf $ModelRepo `
