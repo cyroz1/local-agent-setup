@@ -102,13 +102,23 @@ if (Test-Path $ServerExe) {
 } else {
     Note 'Asking GitHub for the latest llama.cpp release...'
     $headers = @{ 'User-Agent' = 'local-agent-setup' }
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest' -Headers $headers
-    $asset = $release.assets | Where-Object { $_.name -match 'win' -and $_.name -match 'vulkan' -and $_.name -match 'x64' -and $_.name -like '*.zip' } | Select-Object -First 1
-    if (-not $asset) {
-        Write-Host 'Could not pick a Windows Vulkan asset from the latest release. Assets were:' -ForegroundColor Red
-        $release.assets | ForEach-Object { Write-Host "  $($_.name)" }
-        throw 'Asset detection failed, see list above. Nothing was changed for this step.'
+    # /releases/latest is unreliable for llama.cpp: the builds ship as
+    # prereleases and the latest pointer can land on a tag-only release whose
+    # only asset is nightly-tag.txt (that broke this step on 2026-11-09).
+    # Scan recent releases and take the first one that actually carries the
+    # Windows Vulkan x64 zip.
+    $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=10' -Headers $headers
+    $asset = $null
+    $pickedTag = $null
+    foreach ($rel in $releases) {
+        $candidate = $rel.assets | Where-Object { $_.name -match 'win' -and $_.name -match 'vulkan' -and $_.name -match 'x64' -and $_.name -like '*.zip' } | Select-Object -First 1
+        if ($candidate) { $asset = $candidate; $pickedTag = $rel.tag_name; break }
     }
+    if (-not $asset) {
+        Write-Host 'Could not find a Windows Vulkan x64 zip in the 10 most recent llama.cpp releases.' -ForegroundColor Red
+        throw 'Asset detection failed. Nothing was changed for this step.'
+    }
+    Note "llama.cpp release $pickedTag"
     $zipPath = Join-Path $DownloadsDir $asset.name
     Note "Downloading $($asset.name) ($([math]::Round($asset.size / 1MB)) MB)..."
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers
