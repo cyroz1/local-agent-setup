@@ -188,7 +188,7 @@ Step 'Model prefetch and server smoke test'
 # Optional speed flags, probed against this build's --help (same approach
 # as start-coding.ps1): ngram speculative decoding (the K2 0.9B draft
 # model is unusable, its tokenizer metadata fails llama.cpp's vocab
-# check against the 7B), and no-reasoning-preserve when offered.
+# check against the 7B). Reasoning preservation stays on by default.
 $extraArgs = @()
 try {
     $ErrorActionPreference = 'Continue'
@@ -204,9 +204,8 @@ if ($helpText -match 'ngram-mod') {
                     '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
     Note 'Speculative decoding available: draft model will be fetched with the main model.'
 }
-if ($helpText -match 'no-reasoning-preserve') {
-    $extraArgs += '--no-reasoning-preserve'
-}
+# (Reasoning preservation intentionally left on, see start-coding.ps1.)
+
 $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,

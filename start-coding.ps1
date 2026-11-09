@@ -21,9 +21,11 @@
     -ub 1024      bigger prompt micro-batch: faster prompt processing,
                   which is the AMD weak side.
     --no-mmproj   skips the vision projector (about 1GB); pointless for code.
-    --no-reasoning-preserve
-                  the model's old thinking is not re-fed in later turns,
-                  so long agent sessions stop paying for it in context.
+    Reasoning     the model's thinking from earlier turns IS preserved
+    preserved     into later ones (the llama.cpp default for this
+                  template). It costs some context, but wiping the
+                  scratchpad between steps made the agent re-plan the
+                  same action in a loop, which costs far more.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -75,9 +77,11 @@ if ($helpText -match 'ngram-mod') {
                     '--spec-draft-n-max', '6', '--spec-draft-ngl', '99')
     Write-Host 'Speculative decoding: on (K2 0.9B draft model, first run downloads ~0.7GB)'
 }
-if ($helpText -match 'no-reasoning-preserve') {
-    $extraArgs += '--no-reasoning-preserve'
-}
+# Reasoning preservation stays ON (the llama.cpp default): earlier this
+# setup passed --no-reasoning-preserve to save context, but wiping the
+# model's thinking between turns made it re-plan and repeat the same
+# action in agent loops (seen live 2026-11-09). Context length is
+# handled by OpenCode compaction instead.
 # Force K2's JSON tool-call format server-side. Its native XML format
 # intermittently leaks through llama.cpp's parser as raw <|ifm|> text,
 # which ends the agent's turn mid-task with no tool executed (seen live
