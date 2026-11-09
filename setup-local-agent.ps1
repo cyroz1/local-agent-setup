@@ -150,10 +150,10 @@ $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,
     '--host', '127.0.0.1', '--port', "$Port",
-    '-c', '65536', '--jinja',
+    '-c', '32768', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
-    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0'
+    '--cache-type-k', 'q4_0', '--cache-type-v', 'q4_0', '--no-mmproj', '--parallel', '1'
 )
 $serverLog = Join-Path $LogDir 'llama-server-first-run.log'
 Note "Starting llama-server to download the model (this is the big one, ~14GB)..."
@@ -274,7 +274,7 @@ $config = @'
       "models": {
         "devstral-small-2": {
           "name": "Devstral Small 2 24B (local)",
-          "limit": { "context": 65536, "output": 8192 }
+          "limit": { "context": 32768, "output": 8192 }
         }
       }
     }

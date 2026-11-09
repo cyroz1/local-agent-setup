@@ -107,7 +107,7 @@ cat > "$CONFIG_PATH" <<JSON
       "models": {
         "devstral-small-2": {
           "name": "Devstral Small 2 24B (on PC)",
-          "limit": { "context": 65536, "output": 8192 }
+          "limit": { "context": 32768, "output": 8192 }
         }
       }
     }

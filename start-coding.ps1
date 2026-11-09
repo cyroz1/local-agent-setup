@@ -8,8 +8,11 @@
     The model is dense 24B at Q4_K_M (~14GB), so -ngl 99 puts every layer
     on the GPU and there is still room for the 64K context below. Nothing
     is offloaded to the CPU.
-    -c 65536      context size. Raise to 131072 if your sessions need it;
-                  the q8_0 KV cache below keeps the memory cost down.
+    -c 32768      context size, with the KV cache at q4_0 and one slot.
+                  This matters: at 64K with a q8_0 cache the KV cache alone
+                  was ~5GB, which pushed the model partly off the GPU and
+                  tanked speed. 32K/q4_0 keeps everything in VRAM.
+    --no-mmproj   skips the vision projector (about 1GB); pointless for code.
     --spec-type   add "--spec-type ngram-mod" if your llama.cpp build supports
                   it; it speeds up agentic and code-completion style output.
 #>
@@ -44,7 +47,7 @@ Write-Host ''
     -hf $ModelRepo `
     --alias $ModelAlias `
     --host 127.0.0.1 --port $Port `
-    -c 65536 --jinja `
+    -c 32768 --jinja `
     -ngl 99 `
     -fa on `
-    --cache-type-k q8_0 --cache-type-v q8_0
+    --cache-type-k q4_0 --cache-type-v q4_0 --no-mmproj --parallel 1

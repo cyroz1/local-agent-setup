@@ -118,10 +118,10 @@ $serverArgs = @(
     '-hf', $ModelRepo,
     '--alias', $ModelAlias,
     '--host', '0.0.0.0', '--port', '8080',
-    '-c', '65536', '--jinja',
+    '-c', '32768', '--jinja',
     '-ngl', '99',
     '-fa', 'on',
-    '--cache-type-k', 'q8_0', '--cache-type-v', 'q8_0',
+    '--cache-type-k', 'q4_0', '--cache-type-v', 'q4_0', '--no-mmproj', '--parallel', '1',
     '--api-key', $ApiKey
 )
 $serverLog = Join-Path $LogDir 'pc-server-first-run.log'
