@@ -62,11 +62,14 @@ if ($helpText -match 'no-reasoning-preserve') {
 # Force K2's JSON tool-call format server-side. Its native XML format
 # intermittently leaks through llama.cpp's parser as raw <|ifm|> text,
 # which ends the agent's turn mid-task with no tool executed (seen live
-# 2026-11-09). JSON is the format llama.cpp parses reliably.
-if ($helpText -match 'chat-template-kwargs') {
-    $extraArgs += @('--chat-template-kwargs', '{"tool_call_format":"json"}')
-    Write-Host 'Tool call format: json (avoids raw XML tool-call leaks)'
-}
+# 2026-11-09). JSON is the format llama.cpp parses reliably. The value
+# goes through the env var, NOT the --chat-template-kwargs argument:
+# PowerShell 5.1 strips double quotes from native arguments, mangling
+# the JSON into {tool_call_format:json}, which llama.cpp rejects at
+# startup (also seen live 2026-11-09). Builds too old to know the env
+# var simply ignore it.
+$env:LLAMA_ARG_CHAT_TEMPLATE_KWARGS = '{"tool_call_format":"json"}'
+Write-Host 'Tool call format: json (avoids raw XML tool-call leaks)'
 
 & $ServerExe `
     -hf $ModelRepo `
