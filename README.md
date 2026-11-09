@@ -31,8 +31,8 @@ Skip the computer-use download during setup with `-SkipComputerUse`.
 
 ## The 16GB fit, in numbers
 
-- Qwen2.5-Coder-14B at Q4_K_M is ~9GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q4_0 (~2.8GB). Nothing runs on the CPU.
-- Expect roughly 55 to 70 tok/s generation. Dense speed is basically memory bandwidth divided by model size, so the 14B is about twice as fast per token as the 24B it replaced.
+- K2 Horizon 7B at Q4_K_M is ~5.6GB of weights. `-ngl 99` puts every layer on the GPU, and there is room left for the full 64K context with the KV cache at q8_0. Nothing runs on the CPU.
+- Expect roughly 90 to 110 tok/s generation. Dense speed is basically memory bandwidth divided by model size, and 7B reads very little per token.
 - Prompt processing is AMD's weak side (about 3x slower than NVIDIA), so very long contexts take a while to load. 64K context is the default; edit `-c` in start-coding.ps1 if you need 128K.
 - Try a different model: pass `-ModelRepo` to the setup script, or edit the `-hf` line in start-coding.ps1. Any `repo:quant` on Hugging Face works. Keep the `--alias` and the opencode.json model key in sync. (The strongest alternative that still fully fits is the same model at Q5_K_M if you trim context, or Qwen 3.6 27B at Q3_K_M.)
 

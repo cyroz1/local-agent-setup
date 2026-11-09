@@ -5,14 +5,11 @@
   Then, in your project folder, run:  opencode
 
   Tuning notes:
-    The model is dense 14B at Q4_K_M (~9GB), so -ngl 99 puts every layer
-    on the GPU and there is still room for the 64K context below. Nothing
-    is offloaded to the CPU.
-    -c 65536      context size, KV cache at q4_0 (~2.8GB at 64K), one slot.
-                  Cache size is what decides whether everything stays in
-                  VRAM: with the old 24B model a big cache pushed layers
-                  into system RAM and killed speed. At 14B there is room
-                  to spare, so the full 64K is back.
+    The model is dense 7B at Q4_K_M (~5.6GB), so -ngl 99 puts every layer
+    on the GPU with most of the card still free. Nothing is offloaded.
+    -c 65536      context size, KV cache at q8_0, one slot. Cache size is
+                  what decides whether everything stays in VRAM; at this
+                  model size there is room to spare even at 64K.
     --no-mmproj   skips the vision projector (about 1GB); pointless for code.
     --spec-type   add "--spec-type ngram-mod" if your llama.cpp build supports
                   it; it speeds up agentic and code-completion style output.
