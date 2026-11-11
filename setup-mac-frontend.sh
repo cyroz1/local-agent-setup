@@ -5,8 +5,7 @@
 #   1. Checks it can actually reach the PC's model server before changing anything.
 #   2. Installs Node (via Homebrew) and OpenCode.
 #   3. Writes ~/.config/opencode/opencode.json pointing at the PC, with the
-#      Playwright MCP server (browser use runs here,
-#      against your Mac's browsers).
+#      Playwright browser MCP and DuckDuckGo web-search MCP (both run here).
 #   4. Downloads the UI-TARS Desktop app (computer use UI runs here, its
 #      vision model is served by the PC on port 8081).
 #
@@ -80,15 +79,31 @@ if ! opencode --version >/dev/null 2>&1; then
 fi
 note "opencode: $(opencode --version)"
 
-step "OpenCode config (PC provider + browser-use MCP servers)"
+step "OpenCode config (PC provider + browser and web-search MCP servers)"
 CONFIG_DIR="$HOME/.config/opencode"
 CONFIG_PATH="$CONFIG_DIR/opencode.json"
 mkdir -p "$CONFIG_DIR"
+if ! command -v python3 >/dev/null 2>&1; then
+  note "Installing Python 3 for the local web-search MCP..."
+  brew install python || die "Could not install Python 3 for web search."
+fi
 if [ -f "$CONFIG_PATH" ]; then
   BACKUP="$CONFIG_PATH.bak-$(date +%Y%m%d-%H%M%S)"
   cp "$CONFIG_PATH" "$BACKUP"
   note "Existing opencode.json backed up to $BACKUP"
 fi
+WEB_SEARCH_DIR="$CONFIG_DIR/mcp"
+WEB_SEARCH_PATH="$WEB_SEARCH_DIR/web-search-mcp.py"
+mkdir -p "$WEB_SEARCH_DIR"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/web-search-mcp.py" ]; then
+  cp "$SCRIPT_DIR/web-search-mcp.py" "$WEB_SEARCH_PATH"
+else
+  curl -fL -H 'User-Agent: local-agent-setup' \
+    'https://raw.githubusercontent.com/cyroz1/local-agent-setup/main/web-search-mcp.py' \
+    -o "$WEB_SEARCH_PATH" || die "Could not install the web-search MCP bridge."
+fi
+chmod 644 "$WEB_SEARCH_PATH"
 cat > "$CONFIG_PATH" <<JSON
 {
   "\$schema": "https://opencode.ai/config.json",
@@ -117,6 +132,11 @@ cat > "$CONFIG_PATH" <<JSON
     "playwright": {
       "type": "local",
       "command": ["npx", "-y", "@playwright/mcp@latest"],
+      "enabled": true
+    },
+    "web-search": {
+      "type": "local",
+      "command": ["python3", "$WEB_SEARCH_PATH"],
       "enabled": true
     }
   }

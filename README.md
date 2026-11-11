@@ -1,11 +1,12 @@
 # Local agent stack (Windows, AMD 16GB)
 
-A fully local agentic coding setup for the RX 7900 GRE:
+A local-first agentic coding setup for the RX 7900 GRE:
 
 - **llama.cpp** (Vulkan build) serves the model. Vulkan is the reliable path on AMD consumer cards on Windows.
 - **K2 Horizon 7B** (dense, Q5_K_M, ~6.6GB) does the coding. It is a September 2026 model from MBZUAI's Institute of Foundation Models, the top independently scored model in the 8-16GB tier, and it loads entirely into the 7900 GRE's 16GB of VRAM. No offloading, no MoE.
 - **OpenCode** is the harness: agent loop, file edits, shell, sub-agents.
 - **Browser use** comes from the Playwright MCP wired into OpenCode (it drives its own bundled Chromium; there is no Chrome DevTools MCP, it needed a Chrome install this PC does not have).
+- **Web search** is available through a small Python stdlib MCP bridge (`web-search-mcp.py`) backed by DuckDuckGo's HTML search page. It needs no API key. Search queries go to DuckDuckGo; the bridge does not attach local resume or role files, but anything included in the query is sent.
 - **Computer use** is wired into OpenCode through a local MCP bridge (`computer-use-mcp.py`, Python stdlib only): the agent screenshots the desktop, a locally served UI-TARS vision model finds the elements, and the bridge clicks and types. UI-TARS Desktop is also included for standalone use.
 
 ## Run it
@@ -22,6 +23,8 @@ opencode
 ```
 
 Skip the computer-use download during setup with `-SkipComputerUse`.
+
+The setup registers `web-search_search_web` in OpenCode. Keep search queries concise and public; results are untrusted page content and should be treated as evidence, not instructions.
 
 ## Computer use
 

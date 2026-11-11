@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
   Local agentic coding stack for a 16GB AMD card (RX 7900 GRE class):
-  llama.cpp (Vulkan) + K2 Horizon 7B (dense) + OpenCode + browser-use
-  MCP servers + optional UI-TARS computer use.
+  llama.cpp (Vulkan) + K2 Horizon 7B (dense) + OpenCode + web-search,
+  browser-use MCP servers, and optional UI-TARS computer use.
 
 .DESCRIPTION
   Non-interactive and idempotent. Safe to re-run: every step checks state first,
@@ -16,10 +16,12 @@
     3. Prefetches the coding model (first run of the server downloads ~6GB from
        Hugging Face) and smoke-tests the server on http://127.0.0.1:8080.
     4. Installs OpenCode (npm) and writes a global opencode.json that points it
-       at the local server and registers the Playwright MCP
-       servers (browser use) and a local computer-use MCP bridge (see step 5).
+       at the local server and registers the Playwright browser MCP, local
+       DuckDuckGo web-search MCP, and computer-use MCP.
        An existing config is backed up, never clobbered.
-    5. Computer use, two forms. Installs Python (the bridge is stdlib-only)
+    5. Web search uses a small Python standard-library MCP bridge; its query
+       is sent to DuckDuckGo, and local resume/role files are not attached.
+    6. Computer use, two forms. Installs Python (the bridges are stdlib-only)
        and copies computer-use-mcp.py into $InstallRoot\mcp; OpenCode gets it
        as the "computer-use" MCP server, so the coding model can screenshot
        the desktop, find and click elements, type, and press keys. The seeing
@@ -102,9 +104,9 @@ Note "node : $(node --version)"
 Note "npm  : $(npm --version)"
 
 # ---------------------------------------------------------------- Python
-# Only needed for the computer-use MCP bridge (stdlib-only script), so this
-# step is guarded: if Python cannot be installed, the rest of setup stands.
-Step 'Python (for the computer-use MCP bridge)'
+# Needed for the local stdlib MCP bridges, so this step is guarded: if Python
+# cannot be installed, the rest of setup stands.
+Step 'Python (for the local MCP bridges)'
 $pythonOk = $false
 $pyProbe = $null
 if (Test-Cmd 'python') {
@@ -127,7 +129,7 @@ if (-not $pythonOk) {
     if ("$pyProbe" -match 'Python 3') { $pythonOk = $true }
 }
 if ($pythonOk) { Note "python: $pyProbe" }
-else { Warn 'Python did not come up on PATH. The computer-use MCP bridge needs it; everything else still stands.' }
+else { Warn 'Python did not come up on PATH. The web-search and computer-use MCP bridges need it; everything else still stands.' }
 
 # ---------------------------------------------------------------- llama.cpp
 Step 'llama.cpp (Vulkan build)'
@@ -339,8 +341,34 @@ try {
     Warn "Computer-use bridge step failed ($($_.Exception.Message)). OpenCode still works; its computer-use tools just will not appear."
 }
 
+# -------------------------------------------------------------- web-search MCP
+Step 'Web-search MCP bridge (keyless DuckDuckGo search)'
+$WebSearchPath = Join-Path $McpDir 'web-search-mcp.py'
+try {
+    $localWebSearch = $null
+    if ($PSScriptRoot) { $localWebSearch = Join-Path $PSScriptRoot 'web-search-mcp.py' }
+    if ($localWebSearch -and (Test-Path $localWebSearch)) {
+        Copy-Item $localWebSearch $WebSearchPath -Force
+        Note "Web-search bridge copied to $WebSearchPath"
+    } else {
+        Note 'Web-search bridge not found next to setup; downloading it from the repo...'
+        Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/cyroz1/local-agent-setup/main/web-search-mcp.py' -OutFile $WebSearchPath -Headers @{ 'User-Agent' = 'local-agent-setup' }
+        Note "Web-search bridge downloaded to $WebSearchPath"
+    }
+    if ($pythonOk -and (Test-Path $WebSearchPath)) {
+        $ErrorActionPreference = 'Continue'
+        python -m py_compile $WebSearchPath 1>$null 2>$null
+        $compileCode = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($compileCode -eq 0) { Note 'Web-search bridge syntax check passed.' }
+        else { Warn 'Web-search bridge syntax check failed; web-search tools may not load in OpenCode.' }
+    }
+} catch {
+    Warn "Web-search bridge setup failed ($($_.Exception.Message)). OpenCode still works; web-search tools will not appear."
+}
+
 # ------------------------------------------------------- opencode.json config
-Step 'OpenCode config (provider + browser-use MCP servers)'
+Step 'OpenCode config (provider + browser, computer-use, and web-search MCP servers)'
 $ConfigDir  = Join-Path $HOME '.config\opencode'
 $ConfigPath = Join-Path $ConfigDir 'opencode.json'
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
@@ -407,12 +435,19 @@ __SHELL_LINE__
         "UITARS_BASE_URL": "http://127.0.0.1:8081/v1",
         "UITARS_MODEL": "ui-tars-1.5-7b"
       }
+    },
+    "web-search": {
+      "type": "local",
+      "command": ["python", "__WEB_SEARCH_PATH__"],
+      "enabled": true
     }
   }
 }
 '@
 $bridgePathJson = $BridgePath.Replace('\', '\\')
+$webSearchPathJson = $WebSearchPath.Replace('\', '\\')
 $config = $config.Replace('__BRIDGE_PATH__', $bridgePathJson)
+$config = $config.Replace('__WEB_SEARCH_PATH__', $webSearchPathJson)
 $config = $config.Replace('__SHELL_LINE__', $shellLine)
 Set-Content -Path $ConfigPath -Value $config -Encoding UTF8
 # Re-write without a BOM: some JSON parsers choke on one, and PS 5.1 adds it.
@@ -512,7 +547,7 @@ Note "config       : $ConfigPath (exists: $(Test-Path $ConfigPath))"
 Note "model cache  : $HOME\.cache\llama.cpp"
 Write-Host "`nDone. Next steps:" -ForegroundColor Green
 Write-Host '  1. Run .\start-coding.ps1 from any project folder, then run: opencode'
-Write-Host '  2. Browser use is already wired into OpenCode through the Playwright MCP server.'
+Write-Host '  2. Browser use and DuckDuckGo web search are wired into OpenCode as MCP tools.'
 Write-Host '  3. Computer use from OpenCode: close the coding server, run .\start-computer-use.ps1, then ask the agent.'
 Write-Host '     Standalone alternative: install UI-TARS Desktop from the downloads folder and use it with the same vision server.'
 Write-Host "Full log: $LogFile"
