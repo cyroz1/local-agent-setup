@@ -166,7 +166,9 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("answers:suggest", async (_event, payload) => {
-    const { resume, jobDescription, transcript, screenText } = payload || {};
+    const { resume, jobDescription, question } = payload || {};
+    const currentQuestion = String(question || "").trim();
+    if (!currentQuestion) return "";
     const headers = modelHeaders();
     const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
       method: "POST",
@@ -180,11 +182,11 @@ app.whenReady().then(() => {
         messages: [
           {
             role: "system",
-            content: "Answer quickly with 2 to 3 natural first-person sentences. Use only facts and methods explicitly present in the resume; never infer what an analysis found, why a metric changed, or a process detail. For example, 'used funnel analysis' does not mean it revealed a particular drop-off. If the resume omits a requested detail, say that and leave a short [add verified detail] cue. Tailor emphasis to the job description without adding new facts. The question may come from live audio or noisy screen OCR; treat clear prompts such as 'Tell me about...' or 'Describe...' as questions even without punctuation. Do not repeat the question or explain your reasoning. Return only the answer sentences.",
+            content: "You will receive one isolated current interview question. Answer only that question in 2 to 3 natural first-person sentences. For questions about past work, personal history, motivation, preferences, or a specific incident, use only facts explicitly present in the resume. Never infer that one experience caused a career choice, and never invent personal reasons, events, outcomes, or methods. If a requested personal detail is absent, say so briefly and use a short [add your real detail] cue instead of guessing. For hypothetical or general technical questions, give a concise sound approach, clearly framed as what you would do rather than work you have already done. For a named project, select only that project and directly related listed details. Tailor emphasis to the job description without adding new facts. Do not summarize unrelated experience or other projects. Do not repeat the question or explain your reasoning. Return only the answer sentences.",
           },
           {
             role: "user",
-            content: `RESUME\n${String(resume || "").slice(0, 8000)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 5000)}\n\nRECENT INTERVIEW AUDIO\n${String(transcript || "").slice(-1200)}\n\nVISIBLE SCREEN TEXT\n${String(screenText || "").slice(0, 1600)}\n\nUse the clearest current question found in either source. Keep every claim grounded in the resume.`,
+            content: `CURRENT INTERVIEW QUESTION\n${currentQuestion.slice(0, 1000)}\n\nRESUME\n${String(resume || "").slice(0, 8000)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 5000)}\n\nAnswer the current question above. Keep every claim grounded in the resume.`,
           },
         ],
       }),

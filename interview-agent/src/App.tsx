@@ -27,9 +27,15 @@ type ContextField = "resume" | "jobDescription";
 
 const CONTEXT_KEY = "interview-copilot-context-v1";
 const OPACITY_KEY = "interview-copilot-overlay-opacity-v1";
-const AUDIO_WINDOW_SECONDS = 2.4;
-const AUDIO_OVERLAP_SECONDS = 0.8;
-const ANSWER_DEBOUNCE_MS = 350;
+const SPEECH_RMS_THRESHOLD = 0.003;
+const SPEECH_END_SILENCE_MS = 700;
+const SPEECH_PREROLL_SECONDS = 0.2;
+const MAX_UTTERANCE_SECONDS = 24;
+const SCREEN_QUESTION_AUDIO_PRIORITY_MS = 10_000;
+const DUPLICATE_QUESTION_WINDOW_MS = 12_000;
+
+type QuestionSource = "audio" | "screen";
+type PendingAnswer = { question: string; requestId: number };
 
 function loadSavedContext() {
   try {
@@ -48,30 +54,44 @@ function loadOverlayOpacity() {
   return Number.isFinite(saved) && saved >= 65 && saved <= 100 ? saved : 92;
 }
 
-function mergeTranscript(previous: string, next: string) {
-  const prior = previous.trim();
-  const incoming = next.trim();
-  if (!incoming) return prior;
-  if (!prior) return incoming;
-  if (prior.toLowerCase().includes(incoming.toLowerCase())) return prior;
-
-  const oldWords = prior.split(/\s+/);
-  const newWords = incoming.split(/\s+/);
-  const maxOverlap = Math.min(oldWords.length, newWords.length, 16);
-  for (let count = maxOverlap; count >= 1; count -= 1) {
-    const oldTail = oldWords.slice(-count).join(" ").toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
-    const newHead = newWords.slice(0, count).join(" ").toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
-    if (oldTail === newHead) return `${prior} ${newWords.slice(count).join(" ")}`.trim();
-  }
-  return `${prior} ${incoming}`.trim();
-}
-
-function questionLike(text: string) {
-  return /\?|\b(can you tell me|tell me about|walk me through|describe|how would you|what would you|why do you|what is your|how did you|give me an example)\b/i.test(text);
-}
-
 function normalizeForMatch(text: string) {
   return text.toLowerCase().match(/[\p{L}\p{N}']+/gu)?.join(" ") || "";
+}
+
+const QUESTION_START_PATTERN = /^(?:(?:and|so|okay|all right|now|next|well|um|uh)\s+)*(?:(?:can|could|would)\s+you(?:\s+(?:tell me|describe|explain|walk me through|speak to))?|tell me (?:about|how|why|what)|walk me through|give me an example|describe|explain|what(?:'s|\s+is|\s+are|\s+did|\s+do|\s+would)?|why|how|when|where|who|which|could|would|can|do|does|did|is|are|have|has)\b/i;
+
+function questionLike(text: string) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  const words = normalizeForMatch(clean).split(" ").filter(Boolean);
+  const hasQuestionOpening = QUESTION_START_PATTERN.test(clean);
+  return hasQuestionOpening && (words.length >= 5 || (words.length >= 3 && /\?\s*$/.test(clean)));
+}
+
+function extractQuestionCandidate(text: string) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+
+  const parts = clean.split(/(?<=[?!.])\s+/).map((part) => part.trim()).filter(Boolean);
+  const questions = parts.filter(questionLike);
+  if (questions.length) return questions[questions.length - 1];
+  return questionLike(clean) ? clean : "";
+}
+
+function extractScreenQuestion(lines: string[]) {
+  const candidates: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const firstLine = lines[index].replace(/\s+/g, " ").trim();
+    if (!QUESTION_START_PATTERN.test(firstLine)) continue;
+
+    let candidate = firstLine;
+    for (let next = index + 1; next < Math.min(lines.length, index + 4); next += 1) {
+      if (/[?!.]\s*$/.test(candidate) || QUESTION_START_PATTERN.test(lines[next].trim())) break;
+      candidate = `${candidate} ${lines[next].replace(/\s+/g, " ").trim()}`.trim();
+    }
+    const question = extractQuestionCandidate(candidate);
+    if (question) candidates.push(question);
+  }
+  return candidates[candidates.length - 1] || "";
 }
 
 function similarSignature(left: string, right: string) {
@@ -86,6 +106,30 @@ function similarSignature(left: string, right: string) {
 
 function looksLikeQuestionEcho(text: string) {
   return /^(?:tell me about|describe|walk me through|can you tell me|what is your|what did you|what would you|how did you|how would you|why did you|why do you|give me an example)\b/i.test(text.trim());
+}
+
+function conservativeAnswer(question: string, resume: string) {
+  const normalizedQuestion = question.toLowerCase();
+  const normalizedResume = resume.toLowerCase();
+  const asksPersonalMotivation = /\b(?:what led you to|what inspired you to|what motivated you to|why did you choose|why did you decide|what made you choose|what drew you to|why are you interested in|why do you want to|what is your reason for)\b/i.test(normalizedQuestion);
+  const resumeStatesMotivation = /\b(?:i chose .{0,50} because|i decided .{0,50} because|i was inspired|i was motivated|my motivation|my passion|my interest in|what led me to|because i wanted to)\b/i.test(normalizedResume);
+  if (asksPersonalMotivation && !resumeStatesMotivation) {
+    return "The resume doesn’t record my specific personal reason for that choice. I’d add my genuine reason here, then connect it to the relevant experience and projects in my background.";
+  }
+
+  const asksForSpecificCustomerStory = /\b(?:difficult|challenging|tough|complex)\b.{0,80}\b(?:customer|support|issue|incident|situation|problem)\b/i.test(normalizedQuestion);
+  const resumeContainsSpecificStory = /\b(?:one time|for example|a customer (?:called|came|had|needed)|i (?:helped|handled|worked with) a customer|as a result|the result was)\b/i.test(normalizedResume);
+  if (asksForSpecificCustomerStory && !resumeContainsSpecificStory) {
+    return "The resume doesn’t include a detailed customer incident, so I don’t want to invent one. Add a real example here with the customer’s issue, the steps you took, and the outcome.";
+  }
+
+  const asksBootTroubleshooting = /\bhow (?:do|would|can) you\b/i.test(normalizedQuestion)
+    && /\b(?:diagnos|troubleshoot)\w*\b/i.test(normalizedQuestion)
+    && /\b(?:boot|start)\w*\b/i.test(normalizedQuestion);
+  if (asksBootTroubleshooting) {
+    return "I’d first confirm power, cables, and any POST or error indicators, then check whether BIOS/UEFI detects the memory and storage and verify the boot order. If the hardware is detected, I’d use recovery tools and logs to isolate the bootloader or operating system; if not, I’d test the affected hardware.";
+  }
+  return "";
 }
 
 function floatToWav(samples: Float32Array, sourceRate: number, targetRate = 16000) {
@@ -175,13 +219,13 @@ function App() {
   const [sessionState, setSessionState] = useState<SessionState>("prepare");
   const [overlayOpacity, setOverlayOpacity] = useState(loadOverlayOpacity);
   const [clickThrough, setClickThrough] = useState(false);
-  const [heardText, setHeardText] = useState("");
   const [screenText, setScreenText] = useState("");
+  const [activeQuestion, setActiveQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const answerRef = useRef("");
   const [answerBusy, setAnswerBusy] = useState(false);
   const answerBusyRef = useRef(false);
-  const pendingAnswerRef = useRef(false);
+  const pendingAnswerRef = useRef<PendingAnswer | null>(null);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [sessionNotice, setSessionNotice] = useState("");
@@ -200,16 +244,22 @@ function App() {
   const muteRef = useRef<GainNode | null>(null);
   const ocrWorkerRef = useRef<Awaited<ReturnType<typeof createWorker>> | null>(null);
   const ocrTimerRef = useRef<number | null>(null);
-  const audioChunksRef = useRef<Float32Array[]>([]);
-  const audioSamplesRef = useRef(0);
-  const audioBusyRef = useRef(false);
+  const preRollChunksRef = useRef<Float32Array[]>([]);
+  const preRollSamplesRef = useRef(0);
+  const speechChunksRef = useRef<Float32Array[]>([]);
+  const speechSamplesRef = useRef(0);
+  const speechActiveRef = useRef(false);
+  const captureGenerationRef = useRef(0);
+  const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
   const audioSignalRef = useRef(false);
   const lastAudioSignalAtRef = useRef(0);
   const activeCaptureRef = useRef(false);
   const ocrBusyRef = useRef(false);
   const lastQuestionRef = useRef("");
-  const answerTimerRef = useRef<number | null>(null);
-  const heardRef = useRef("");
+  const lastQuestionAtRef = useRef(0);
+  const lastAudioQuestionAtRef = useRef(0);
+  const answerRequestIdRef = useRef(0);
+  const activeQuestionRef = useRef("");
   const screenTextRef = useRef("");
   const resumeRef = useRef(resume);
   const jobRef = useRef(jobDescription);
@@ -217,7 +267,6 @@ function App() {
 
   useEffect(() => { resumeRef.current = resume; }, [resume]);
   useEffect(() => { jobRef.current = jobDescription; }, [jobDescription]);
-  useEffect(() => { heardRef.current = heardText; }, [heardText]);
   useEffect(() => { screenTextRef.current = screenText; }, [screenText]);
   useEffect(() => window.interviewAgent.onClickThroughChanged(setClickThrough), []);
 
@@ -270,72 +319,95 @@ function App() {
     await window.interviewAgent.selectSource(sourceId);
   }, []);
 
-  const requestAnswer = useCallback(async (questionOverride?: string) => {
-    const transcript = questionOverride || heardRef.current;
-    const screen = screenTextRef.current;
-    if (!transcript.trim() && !screen.trim()) return;
+  const requestAnswer = useCallback((questionText: string) => {
+    const question = questionText.trim();
+    if (!question) return;
+
+    const request = { question, requestId: ++answerRequestIdRef.current };
     if (answerBusyRef.current) {
-      pendingAnswerRef.current = true;
+      pendingAnswerRef.current = request;
       return;
     }
+
     answerBusyRef.current = true;
     setAnswerBusy(true);
     setSessionNotice("");
-    try {
-      const suggestion = await window.interviewAgent.suggestAnswer({
-        resume: resumeRef.current,
-        jobDescription: jobRef.current,
-        transcript,
-        screenText: screen,
-      });
-      const nextAnswer = looksLikeQuestionEcho(suggestion)
-        ? "I couldn't find a grounded answer in the resume context. Add a verified detail and refresh."
-        : suggestion || "I could not form a clear answer from the available context yet.";
-      answerRef.current = nextAnswer;
-      setAnswer(nextAnswer);
-    } catch (error) {
-      setSessionNotice(error instanceof Error ? error.message : "The local answer service is unavailable.");
-    } finally {
+    void (async () => {
+      let current: PendingAnswer | null = request;
+      while (current) {
+        try {
+          const verifiedContextFallback = conservativeAnswer(current.question, resumeRef.current);
+          const suggestion = verifiedContextFallback || await window.interviewAgent.suggestAnswer({
+              resume: resumeRef.current,
+              jobDescription: jobRef.current,
+              question: current.question,
+            });
+          if (current.requestId === answerRequestIdRef.current) {
+            const nextAnswer = looksLikeQuestionEcho(suggestion)
+              ? "I couldn't find a grounded answer in the resume context. Add a verified detail and refresh."
+              : suggestion || "I could not form a clear answer from the available context yet.";
+            answerRef.current = nextAnswer;
+            setAnswer(nextAnswer);
+          }
+        } catch (error) {
+          if (current.requestId === answerRequestIdRef.current) {
+            setSessionNotice(error instanceof Error ? error.message : "The local answer service is unavailable.");
+          }
+        }
+
+        current = pendingAnswerRef.current;
+        pendingAnswerRef.current = null;
+      }
       answerBusyRef.current = false;
       setAnswerBusy(false);
-      if (pendingAnswerRef.current) {
-        pendingAnswerRef.current = false;
-        window.setTimeout(() => { void requestAnswer(); }, 180);
-      }
-    }
+    })();
   }, []);
 
-  const scheduleAnswer = useCallback((text: string) => {
-    if (!questionLike(text)) return;
-    const signature = normalizeForMatch(text).slice(-420);
-    if (signature === lastQuestionRef.current || similarSignature(signature, lastQuestionRef.current)) return;
-    if (answerTimerRef.current) window.clearTimeout(answerTimerRef.current);
-    answerTimerRef.current = window.setTimeout(() => {
-      lastQuestionRef.current = signature;
-      void requestAnswer();
-    }, ANSWER_DEBOUNCE_MS);
+  const considerQuestion = useCallback((text: string, source: QuestionSource) => {
+    const question = source === "screen"
+      ? extractScreenQuestion(text.split(/\r?\n/))
+      : extractQuestionCandidate(text);
+    if (!question) return;
+
+    const now = Date.now();
+    if (source === "screen" && now - lastAudioQuestionAtRef.current < SCREEN_QUESTION_AUDIO_PRIORITY_MS) return;
+    const signature = normalizeForMatch(question).slice(-420);
+    if (!signature) return;
+    if (
+      now - lastQuestionAtRef.current < DUPLICATE_QUESTION_WINDOW_MS
+      && (signature === lastQuestionRef.current || similarSignature(signature, lastQuestionRef.current))
+    ) return;
+
+    lastQuestionRef.current = signature;
+    lastQuestionAtRef.current = now;
+    if (source === "audio") lastAudioQuestionAtRef.current = now;
+    activeQuestionRef.current = question;
+    setActiveQuestion(question);
+    answerRef.current = "";
+    setAnswer("");
+    void requestAnswer(question);
   }, [requestAnswer]);
 
   const appendHeard = useCallback((text: string, language?: string) => {
     if (!text.trim()) return;
-    const joined = mergeTranscript(heardRef.current, text).slice(-3600);
-    heardRef.current = joined;
-    setHeardText(joined);
-    scheduleAnswer(joined);
+    considerQuestion(text, "audio");
     if (language) setAudioLanguage(language);
-  }, [scheduleAnswer]);
+  }, [considerQuestion]);
 
-  const transcribeWindow = useCallback(async (samples: Float32Array, sampleRate: number) => {
-    audioBusyRef.current = true;
-    try {
-      const wav = floatToWav(samples, sampleRate);
-      const result = await window.interviewAgent.transcribe(wav);
-      appendHeard(result.text, result.language);
-    } catch {
-      setSessionNotice("Local transcription stopped responding. Check the transcription service.");
-    } finally {
-      audioBusyRef.current = false;
-    }
+  const transcribeWindow = useCallback((samples: Float32Array, sampleRate: number, generation: number) => {
+    if (samples.length < sampleRate * 0.35) return;
+    transcriptionQueueRef.current = transcriptionQueueRef.current
+      .then(async () => {
+        if (generation !== captureGenerationRef.current) return;
+        const wav = floatToWav(samples, sampleRate);
+        const result = await window.interviewAgent.transcribe(wav);
+        if (generation === captureGenerationRef.current) appendHeard(result.text, result.language);
+      })
+      .catch(() => {
+        if (generation === captureGenerationRef.current) {
+          setSessionNotice("Local transcription stopped responding. Check the transcription service.");
+        }
+      });
   }, [appendHeard]);
 
   const startScreenReader = useCallback(async () => {
@@ -375,14 +447,21 @@ function App() {
       for (let index = 0; index + 4 <= answerWords.length; index += 2) {
         answerPhrases.push(answerWords.slice(index, index + 4).join(" "));
       }
-      const text = data.text
+      const questionWords = activeQuestionRef.current.toLowerCase().match(/[\p{L}\p{N}']+/gu) || [];
+      const questionPhrases: string[] = [];
+      for (let index = 0; index + 4 <= questionWords.length; index += 2) {
+        questionPhrases.push(questionWords.slice(index, index + 4).join(" "));
+      }
+      const visibleLines = data.text
         .split(/\r?\n/)
         .filter((line) => {
           const normalized = line.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, " ").trim();
           const isAnswer = answerPhrases.some((phrase) => normalized.includes(phrase));
-          const isOverlayChrome = /interview copilot|suggested answer|audio listening|screen captured|screen text ready|reading screen|use as a guide|pause session|click-through|visible in screen capture|opacity|live transcription|shaping a concise answer|grounded suggestion|listening for the next question|refresh answer|your context|\blive\b|\bpaused\b/i.test(line);
-          return !isAnswer && !isOverlayChrome;
-        })
+          const isActiveQuestion = questionPhrases.some((phrase) => normalized.includes(phrase));
+          const isOverlayChrome = /interview copilot|suggested answer|audio listening|screen captured|screen text ready|reading screen|use as a guide|pause session|click-through|visible in screen capture|opacity|live transcription|shaping a concise answer|grounded suggestion|listening for the next question|refresh answer|your context|current question|\blive\b|\bpaused\b/i.test(line);
+          return !isAnswer && !isActiveQuestion && !isOverlayChrome;
+        });
+      const text = visibleLines
         .join(" ")
         .replace(/\s+/g, " ")
         .trim()
@@ -390,7 +469,7 @@ function App() {
       if (text && normalizeForMatch(text) !== normalizeForMatch(screenTextRef.current)) {
         screenTextRef.current = text;
         setScreenText(text);
-        scheduleAnswer(`${heardRef.current}\n${text}`);
+        considerQuestion(visibleLines.join("\n"), "screen");
       }
       setOcrProgress("Screen text ready");
     } catch {
@@ -398,7 +477,7 @@ function App() {
     } finally {
       ocrBusyRef.current = false;
     }
-  }, [scheduleAnswer]);
+  }, [considerQuestion]);
 
   const startCapture = useCallback(async () => {
     if (!selectedSource) throw new Error("Choose a screen or window first.");
@@ -452,8 +531,12 @@ function App() {
     silent.connect(audioContext.destination);
     processorRef.current = processor;
     muteRef.current = silent;
-    audioChunksRef.current = [];
-    audioSamplesRef.current = 0;
+    preRollChunksRef.current = [];
+    preRollSamplesRef.current = 0;
+    speechChunksRef.current = [];
+    speechSamplesRef.current = 0;
+    speechActiveRef.current = false;
+    const captureGeneration = ++captureGenerationRef.current;
     activeCaptureRef.current = true;
     audioSignalRef.current = false;
     lastAudioSignalAtRef.current = 0;
@@ -466,7 +549,7 @@ function App() {
       for (let index = 0; index < incoming.length; index += 4) energy += incoming[index] * incoming[index];
       const rms = Math.sqrt(energy / Math.max(1, Math.ceil(incoming.length / 4)));
       const now = Date.now();
-      if (rms > 0.003) {
+      if (rms > SPEECH_RMS_THRESHOLD) {
         lastAudioSignalAtRef.current = now;
         if (!audioSignalRef.current) {
           audioSignalRef.current = true;
@@ -476,19 +559,50 @@ function App() {
         audioSignalRef.current = false;
         setAudioSignal(false);
       }
-      audioChunksRef.current.push(incoming);
-      audioSamplesRef.current += incoming.length;
-      const windowSamples = Math.floor(audioContext.sampleRate * AUDIO_WINDOW_SECONDS);
-      const overlapSamples = Math.floor(audioContext.sampleRate * AUDIO_OVERLAP_SECONDS);
-      if (audioSamplesRef.current < windowSamples || audioBusyRef.current) return;
 
-      const all = takeSamples(audioChunksRef.current, audioSamplesRef.current);
-      const window = all.slice(0, windowSamples);
-      const keepFrom = Math.max(0, windowSamples - overlapSamples);
-      const leftover = all.slice(keepFrom);
-      audioChunksRef.current = leftover.length ? [leftover] : [];
-      audioSamplesRef.current = leftover.length;
-      void transcribeWindow(window, audioContext.sampleRate);
+      if (!speechActiveRef.current) {
+        preRollChunksRef.current.push(incoming);
+        preRollSamplesRef.current += incoming.length;
+        const maxPreRollSamples = Math.floor(audioContext.sampleRate * SPEECH_PREROLL_SECONDS);
+        let excessSamples = preRollSamplesRef.current - maxPreRollSamples;
+        while (excessSamples > 0 && preRollChunksRef.current.length) {
+          const first = preRollChunksRef.current[0];
+          if (first.length <= excessSamples) {
+            preRollChunksRef.current.shift();
+            preRollSamplesRef.current -= first.length;
+            excessSamples -= first.length;
+          } else {
+            preRollChunksRef.current[0] = first.slice(excessSamples);
+            preRollSamplesRef.current -= excessSamples;
+            excessSamples = 0;
+          }
+        }
+
+        if (rms > SPEECH_RMS_THRESHOLD) {
+          speechActiveRef.current = true;
+          speechChunksRef.current = preRollChunksRef.current;
+          speechSamplesRef.current = preRollSamplesRef.current;
+          preRollChunksRef.current = [];
+          preRollSamplesRef.current = 0;
+          lastAudioSignalAtRef.current = now;
+        }
+        return;
+      }
+
+      speechChunksRef.current.push(incoming);
+      speechSamplesRef.current += incoming.length;
+      const silenceEnded = rms <= SPEECH_RMS_THRESHOLD
+        && now - lastAudioSignalAtRef.current >= SPEECH_END_SILENCE_MS;
+      const maxUtteranceReached = speechSamplesRef.current >= audioContext.sampleRate * MAX_UTTERANCE_SECONDS;
+      if (silenceEnded || maxUtteranceReached) {
+        const utterance = takeSamples(speechChunksRef.current, speechSamplesRef.current);
+        speechChunksRef.current = [];
+        speechSamplesRef.current = 0;
+        speechActiveRef.current = false;
+        preRollChunksRef.current = [];
+        preRollSamplesRef.current = 0;
+        transcribeWindow(utterance, audioContext.sampleRate, captureGeneration);
+      }
     };
 
     try {
@@ -512,6 +626,8 @@ function App() {
 
   const stopCapture = useCallback(async () => {
     activeCaptureRef.current = false;
+    captureGenerationRef.current += 1;
+    transcriptionQueueRef.current = Promise.resolve();
     if (ocrTimerRef.current !== null) window.clearInterval(ocrTimerRef.current);
     ocrTimerRef.current = null;
     processorRef.current?.disconnect();
@@ -529,9 +645,11 @@ function App() {
     const worker = ocrWorkerRef.current;
     ocrWorkerRef.current = null;
     if (worker) await worker.terminate();
-    audioChunksRef.current = [];
-    audioSamplesRef.current = 0;
-    audioBusyRef.current = false;
+    preRollChunksRef.current = [];
+    preRollSamplesRef.current = 0;
+    speechChunksRef.current = [];
+    speechSamplesRef.current = 0;
+    speechActiveRef.current = false;
     audioSignalRef.current = false;
     lastAudioSignalAtRef.current = 0;
     setAudioSignal(false);
@@ -575,20 +693,27 @@ function App() {
 
   const endSession = useCallback(async () => {
     await stopCapture();
-    if (answerTimerRef.current) window.clearTimeout(answerTimerRef.current);
+    answerRequestIdRef.current += 1;
+    pendingAnswerRef.current = null;
     setSessionState("prepare");
-    setHeardText("");
     setScreenText("");
+    screenTextRef.current = "";
+    setActiveQuestion("");
+    activeQuestionRef.current = "";
     setAnswer("");
+    answerRef.current = "";
     setAudioAvailable(false);
     setSessionNotice("");
     lastQuestionRef.current = "";
+    lastQuestionAtRef.current = 0;
+    lastAudioQuestionAtRef.current = 0;
     await window.interviewAgent.returnToPrepare();
   }, [stopCapture]);
 
   useEffect(() => () => {
     activeCaptureRef.current = false;
-    if (answerTimerRef.current) window.clearTimeout(answerTimerRef.current);
+    answerRequestIdRef.current += 1;
+    pendingAnswerRef.current = null;
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
     micStreamRef.current?.getTracks().forEach((track) => track.stop());
     if (audioContextRef.current?.state !== "closed") void audioContextRef.current?.close();
@@ -664,9 +789,9 @@ function App() {
           </div>
 
           <section className="overlay-section heard-section">
-            <div className="section-heading"><span>Heard</span><span className="subtle-heading">{audioLanguage || (sessionState === "live" ? "Live transcription" : "Session paused")}</span></div>
-            <p className={`transcript-text ${heardText ? "" : "empty-copy"}`}>
-              {heardText ? heardText.slice(-520) : sessionState === "live" ? "Listening for the next question…" : "Resume when you're ready to continue."}
+            <div className="section-heading"><span>Current question</span><span className="subtle-heading">{audioLanguage || (sessionState === "live" ? "Listening" : "Session paused")}</span></div>
+            <p className={`transcript-text ${activeQuestion ? "" : "empty-copy"}`}>
+              {activeQuestion || (sessionState === "live" ? "Listening for a complete question…" : "Resume when you're ready to continue.")}
             </p>
           </section>
 
@@ -696,7 +821,7 @@ function App() {
           <div className="overlay-actions">
             {sessionState === "live" ? (
               <>
-                <button className="button button-primary overlay-primary" onClick={() => void requestAnswer()} disabled={answerBusy}>
+                <button className="button button-primary overlay-primary" onClick={() => void requestAnswer(activeQuestionRef.current)} disabled={answerBusy || !activeQuestion}>
                   {answerBusy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={15} />} Refresh answer
                 </button>
                 <button className="button button-quiet-dark" onClick={() => void pauseSession()}><Pause size={15} /> Pause</button>

@@ -15,8 +15,7 @@ interface Window {
     suggestAnswer(payload: {
       resume: string;
       jobDescription: string;
-      transcript: string;
-      screenText: string;
+      question: string;
     }): Promise<string>;
   };
 }
