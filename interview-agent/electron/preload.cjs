@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld("interviewAgent", {
   minimize: () => ipcRenderer.invoke("window:minimize"),
   close: () => ipcRenderer.invoke("window:close"),
   checkServices: () => ipcRenderer.invoke("services:check"),
-  transcribe: (wavBytes) => ipcRenderer.invoke("audio:transcribe", wavBytes),
+  transcribe: (wavBytes, identifySpeaker) => ipcRenderer.invoke("audio:transcribe", wavBytes, identifySpeaker),
+  enrollVoice: (wavBytes) => ipcRenderer.invoke("speaker:enroll", wavBytes),
+  clearVoiceProfile: () => ipcRenderer.invoke("speaker:clear"),
   suggestAnswer: (payload) => ipcRenderer.invoke("answers:suggest", payload),
 });

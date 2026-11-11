@@ -108,6 +108,14 @@ h1 { margin: 0; color: #19252d; font: 700 30px/1.15 "Segoe UI", "Aptos", sans-se
 .capture-mode.selected { color: var(--accent-dark); background: #fff; border-color: #d4e4df; box-shadow: 0 1px 2px rgba(24, 42, 48, 0.06); }
 .capture-setup-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 13px; }
 .capture-setup-heading p { max-width: 640px; margin: 4px 0 0; color: #829096; font-size: 11px; line-height: 1.45; }
+.voice-enrollment { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; padding: 12px 13px; background: rgba(255, 255, 255, 0.68); border: 1px solid #dce4e1; border-radius: 8px; }
+.voice-enrollment-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.voice-enrollment-copy strong { color: #35434a; font-size: 11px; }
+.voice-enrollment-copy span { color: #829096; font-size: 10px; line-height: 1.45; }
+.voice-enrollment-copy .voice-notice { color: #56706b; }
+.voice-enrollment-copy .voice-notice.error { color: #a84d3e; }
+.voice-enrollment-actions { display: flex; flex: 0 0 auto; gap: 6px; }
+.voice-clear { width: 30px; padding: 0; }
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 0 15px; border: 1px solid transparent; border-radius: 7px; font-size: 12px; font-weight: 700; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; }
 .button:active:not(:disabled) { transform: translateY(1px); }
 .button:disabled { cursor: not-allowed; opacity: 0.52; }
@@ -183,6 +191,7 @@ h1 { margin: 0; color: #19252d; font: 700 30px/1.15 "Segoe UI", "Aptos", sans-se
   .local-label { font-size: 10px; }
   .services-row { gap: 13px; flex-wrap: wrap; }
   .services-title { width: 100%; margin-right: 0; }
+  .voice-enrollment { align-items: flex-start; }
 }
 
 @media (max-height: 760px) {

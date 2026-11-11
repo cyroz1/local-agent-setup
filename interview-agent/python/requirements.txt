@@ -1,2 +1,4 @@
 faster-whisper==1.1.0
 requests>=2.31
+sherpa-onnx==2.0.1
+sherpa-onnx-bin==2.0.1

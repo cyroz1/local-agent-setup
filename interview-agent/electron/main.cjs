@@ -148,20 +148,48 @@ app.whenReady().then(() => {
         .catch(() => false),
       fetch(`${ASR_URL}/health`, { signal: AbortSignal.timeout(2500) })
         .then((response) => response.json())
-        .then((body) => body.status === "ok")
-        .catch(() => false),
+        .catch(() => null),
     ]);
-    return { model, transcription };
+    return {
+      model,
+      transcription: transcription?.status === "ok",
+      speakerRecognition: Boolean(transcription?.speakerRecognition),
+      voiceProfile: Boolean(transcription?.voiceProfile),
+    };
   });
 
-  ipcMain.handle("audio:transcribe", async (_event, wavBytes) => {
+  ipcMain.handle("audio:transcribe", async (_event, wavBytes, identifySpeaker) => {
     const response = await fetch(`${ASR_URL}/transcribe`, {
       method: "POST",
-      headers: { "Content-Type": "audio/wav" },
+      headers: {
+        "Content-Type": "audio/wav",
+        ...(identifySpeaker ? { "X-Identify-Speaker": "true" } : {}),
+      },
       body: Buffer.from(wavBytes),
       signal: AbortSignal.timeout(90000),
     });
     if (!response.ok) throw new Error(`Transcription service returned ${response.status}`);
+    return response.json();
+  });
+
+  ipcMain.handle("speaker:enroll", async (_event, wavBytes) => {
+    const response = await fetch(`${ASR_URL}/speaker/enroll`, {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: Buffer.from(wavBytes),
+      signal: AbortSignal.timeout(30000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Voice setup returned ${response.status}`);
+    return result;
+  });
+
+  ipcMain.handle("speaker:clear", async () => {
+    const response = await fetch(`${ASR_URL}/speaker/clear`, {
+      method: "POST",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw new Error(`Could not clear the local voice profile (${response.status}).`);
     return response.json();
   });
 

@@ -10,8 +10,20 @@ interface Window {
     onClickThroughChanged(callback: (enabled: boolean) => void): () => void;
     minimize(): Promise<void>;
     close(): Promise<void>;
-    checkServices(): Promise<{ model: boolean; transcription: boolean }>;
-    transcribe(wavBytes: ArrayBuffer): Promise<{ text: string; language?: string }>;
+    checkServices(): Promise<{
+      model: boolean;
+      transcription: boolean;
+      speakerRecognition: boolean;
+      voiceProfile: boolean;
+    }>;
+    transcribe(wavBytes: ArrayBuffer, identifySpeaker?: boolean): Promise<{
+      text: string;
+      language?: string;
+      speaker?: "you" | "interviewer" | "unknown";
+      speakerSimilarity?: number | null;
+    }>;
+    enrollVoice(wavBytes: ArrayBuffer): Promise<{ status: string; voiceProfile: boolean }>;
+    clearVoiceProfile(): Promise<{ status: string; voiceProfile: boolean }>;
     suggestAnswer(payload: {
       resume: string;
       jobDescription: string;

@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-  Installs the local Interview Copilot desktop app and offline speech/OCR assets.
+  Installs the local Interview Copilot desktop app and offline speech, speaker-ID, and OCR assets.
 
 .DESCRIPTION
   Keeps all runtime services on this PC. The first setup downloads app packages,
-  the English Whisper base model, and local OCR worker files.
+  the English Whisper base model, a speaker embedding model, and local OCR worker files.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -67,6 +67,16 @@ $env:WHISPER_MODEL_DIR = $ModelDir
 Write-Host 'Preparing the offline English speech model (first download is about 150 MB)...' -ForegroundColor Cyan
 & $VenvPython -c "import os; from faster_whisper import WhisperModel; WhisperModel('base.en', device='cpu', compute_type='int8', download_root=os.environ['WHISPER_MODEL_DIR']); print('Offline transcription model ready.')"
 if ($LASTEXITCODE -ne 0) { throw 'Could not download or prepare the offline speech model.' }
+
+$SpeakerModelPath = Join-Path $ModelDir 'nemo_en_titanet_small.onnx'
+if (-not (Test-Path $SpeakerModelPath)) {
+    Write-Host 'Downloading the local speaker-identification model...' -ForegroundColor Cyan
+    Invoke-WebRequest -Uri 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_small.onnx' -OutFile $SpeakerModelPath
+}
+$env:SPEAKER_MODEL_PATH = $SpeakerModelPath
+$env:SPEAKER_PROFILE_PATH = Join-Path $ModelDir 'speaker-profile.npy'
+& $VenvPython -c "import sherpa_onnx; print('Local speaker-identification engine ready.')"
+if ($LASTEXITCODE -ne 0) { throw 'Could not install the local speaker-identification engine.' }
 
 Write-Host ''
 Write-Host 'Interview Copilot is ready.' -ForegroundColor Green

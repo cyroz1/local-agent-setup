@@ -40,7 +40,7 @@ An optional local desktop companion can load resume and role context, transcribe
 
 During a session, the overlay stays above other windows. Adjust its opacity from the title bar. The pointer button enables click-through for 20 seconds; press `Ctrl+Alt+Shift+O` to restore pointer input on Windows/Linux (`⌘⌥⇧O` on macOS). These controls do not change screen-capture visibility.
 
-The app has two capture modes. **Screen interview** reads the selected screen and uses its system audio. **External call** keeps the selected call app's system audio separate from your microphone: call audio is labeled as the interviewer, and microphone audio is labeled as you. Only interviewer questions trigger answer suggestions. Route the call through this computer and use headphones for clean speaker separation; a microphone-only mixed recording cannot reliably tell speakers apart. Audio utterances are transcribed after 700 ms of silence, then answered by the local model. Screen OCR runs every 1.5 seconds in screen interview mode. Actual response time depends on speech clarity, machine load, and the local model.
+The app has two capture modes. **Screen interview** reads the selected screen and separates its system audio from your microphone. **External call** listens to one microphone containing both speakers. Record an eight-second sample of your voice first; local speaker matching labels your voice as you and the other clear voice as the interviewer. Only interviewer questions trigger answer suggestions. The voice signature stays on this PC, and the enrollment recording is discarded. Overlapping speech or a poor microphone sample can make speaker labels uncertain. Audio utterances are transcribed after 700 ms of silence, then answered by the local model. Screen OCR runs every 1.5 seconds in screen interview mode. Actual response time depends on speech clarity, machine load, speaker matching, and the local model.
 
 Install once from the repository root:
 
@@ -54,7 +54,7 @@ For each session, run `.\start-coding.ps1` and leave it open, then in another Po
 powershell -ExecutionPolicy Bypass -File .\start-interview-agent.ps1
 ```
 
-Paste or drop a resume, add a job description when available, choose a capture mode and screen/window, and start the session. The job description is optional. The first install downloads the offline English transcription model and OCR files. Capture begins only after you choose a source and start the session; pause or end it in the overlay to stop audio and screen processing.
+Paste or drop a resume, add a job description when available, choose a capture mode, and start the session. In Screen interview, select a screen/window. In External call, record your voice sample first. The job description is optional. The first install downloads the offline English transcription and speaker-identification models plus OCR files. Capture begins only after you start the session; pause or end it in the overlay to stop audio and screen processing.
 
 ## Phone remote control
 

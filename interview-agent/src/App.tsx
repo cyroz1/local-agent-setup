@@ -17,15 +17,17 @@ import {
   X,
   Minus,
   MousePointer2,
+  Mic,
+  Trash2,
 } from "lucide-react";
 import { createWorker, PSM } from "tesseract.js";
 
 type Source = { id: string; name: string; thumbnail: string };
-type Services = { model: boolean; transcription: boolean };
+type Services = { model: boolean; transcription: boolean; speakerRecognition: boolean; voiceProfile: boolean };
 type SessionState = "prepare" | "live" | "paused";
 type ContextField = "resume" | "jobDescription";
 type CaptureMode = "screen" | "external-call";
-type AudioSpeaker = "interviewer" | "you";
+type AudioSpeaker = "interviewer" | "you" | "mixed" | "unknown";
 
 type UtterancePipeline = {
   preRollChunks: Float32Array[];
@@ -39,6 +41,7 @@ type UtterancePipeline = {
 
 const CONTEXT_KEY = "interview-copilot-context-v1";
 const OPACITY_KEY = "interview-copilot-overlay-opacity-v1";
+const VOICE_SAMPLE_SECONDS = 8;
 const SPEECH_RMS_THRESHOLD = 0.003;
 const SPEECH_END_SILENCE_MS = 700;
 const SPEECH_PREROLL_SECONDS = 0.2;
@@ -178,6 +181,49 @@ function floatToWav(samples: Float32Array, sourceRate: number, targetRate = 1600
   return buffer;
 }
 
+async function recordVoiceSample(durationSeconds: number) {
+  const microphone = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
+    video: false,
+  });
+  const audioContext = new AudioContext();
+  const source = audioContext.createMediaStreamSource(microphone);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  const silent = audioContext.createGain();
+  silent.gain.value = 0;
+  const chunks: Float32Array[] = [];
+  const targetSamples = Math.floor(audioContext.sampleRate * durationSeconds);
+  let capturedSamples = 0;
+
+  try {
+    source.connect(processor);
+    processor.connect(silent);
+    silent.connect(audioContext.destination);
+    await audioContext.resume();
+    const samples = await new Promise<Float32Array>((resolve, reject) => {
+      const timeout = window.setTimeout(() => reject(new Error("The microphone recording timed out.")), 15_000);
+      processor.onaudioprocess = (event) => {
+        const incoming = new Float32Array(event.inputBuffer.getChannelData(0));
+        chunks.push(incoming);
+        capturedSamples += incoming.length;
+        if (capturedSamples >= targetSamples) {
+          window.clearTimeout(timeout);
+          processor.onaudioprocess = null;
+          resolve(takeSamples(chunks, targetSamples));
+        }
+      };
+    });
+    return floatToWav(samples, audioContext.sampleRate);
+  } finally {
+    processor.onaudioprocess = null;
+    source.disconnect();
+    processor.disconnect();
+    silent.disconnect();
+    microphone.getTracks().forEach((track) => track.stop());
+    if (audioContext.state !== "closed") await audioContext.close();
+  }
+}
+
 function takeSamples(chunks: Float32Array[], count: number) {
   const output = new Float32Array(count);
   let offset = 0;
@@ -239,7 +285,7 @@ function App() {
   const [jobDescription, setJobDescription] = useState<string>(savedContext.jobDescription);
   const [sources, setSources] = useState<Source[]>([]);
   const [selectedSource, setSelectedSource] = useState("");
-  const [services, setServices] = useState<Services>({ model: false, transcription: false });
+  const [services, setServices] = useState<Services>({ model: false, transcription: false, speakerRecognition: false, voiceProfile: false });
   const [sessionState, setSessionState] = useState<SessionState>("prepare");
   const [captureMode, setCaptureMode] = useState<CaptureMode>("screen");
   const [overlayOpacity, setOverlayOpacity] = useState(loadOverlayOpacity);
@@ -247,6 +293,7 @@ function App() {
   const [screenText, setScreenText] = useState("");
   const [activeQuestion, setActiveQuestion] = useState("");
   const [yourSpeech, setYourSpeech] = useState("");
+  const [unidentifiedSpeech, setUnidentifiedSpeech] = useState("");
   const [answer, setAnswer] = useState("");
   const answerRef = useRef("");
   const [answerBusy, setAnswerBusy] = useState(false);
@@ -256,10 +303,11 @@ function App() {
   const [sourceError, setSourceError] = useState("");
   const [sessionNotice, setSessionNotice] = useState("");
   const [saveNotice, setSaveNotice] = useState("");
+  const [voiceNotice, setVoiceNotice] = useState("");
+  const [voiceEnrollmentBusy, setVoiceEnrollmentBusy] = useState(false);
   const [ocrProgress, setOcrProgress] = useState("");
   const [audioLanguage, setAudioLanguage] = useState("");
   const [audioAvailable, setAudioAvailable] = useState(false);
-  const [callAudioAvailable, setCallAudioAvailable] = useState(false);
   const [microphoneAvailable, setMicrophoneAvailable] = useState(false);
   const [audioSignal, setAudioSignal] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -274,7 +322,7 @@ function App() {
   const ocrTimerRef = useRef<number | null>(null);
   const captureGenerationRef = useRef(0);
   const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const sourceSignalRef = useRef<Record<AudioSpeaker, boolean>>({ interviewer: false, you: false });
+  const sourceSignalRef = useRef<Record<AudioSpeaker, boolean>>({ interviewer: false, you: false, mixed: false, unknown: false });
   const activeCaptureRef = useRef(false);
   const ocrBusyRef = useRef(false);
   const lastQuestionRef = useRef("");
@@ -305,7 +353,36 @@ function App() {
     try {
       setServices(await window.interviewAgent.checkServices());
     } catch {
-      setServices({ model: false, transcription: false });
+      setServices({ model: false, transcription: false, speakerRecognition: false, voiceProfile: false });
+    }
+  }, []);
+
+  const enrollVoice = useCallback(async () => {
+    if (!services.speakerRecognition) {
+      setVoiceNotice("Local speaker identification is unavailable. Run setup-interview-agent.ps1 to install it.");
+      return;
+    }
+    setVoiceEnrollmentBusy(true);
+    setVoiceNotice(`Recording ${VOICE_SAMPLE_SECONDS} seconds. Speak naturally until recording finishes.`);
+    try {
+      const wav = await recordVoiceSample(VOICE_SAMPLE_SECONDS);
+      const result = await window.interviewAgent.enrollVoice(wav);
+      setServices((current) => ({ ...current, voiceProfile: result.voiceProfile }));
+      setVoiceNotice("Voice signature saved on this device. The sample recording was discarded.");
+    } catch (error) {
+      setVoiceNotice(error instanceof Error ? error.message : "Could not create a voice signature.");
+    } finally {
+      setVoiceEnrollmentBusy(false);
+    }
+  }, [services.speakerRecognition]);
+
+  const clearVoiceProfile = useCallback(async () => {
+    try {
+      await window.interviewAgent.clearVoiceProfile();
+      setServices((current) => ({ ...current, voiceProfile: false }));
+      setVoiceNotice("Voice signature cleared from this device.");
+    } catch (error) {
+      setVoiceNotice(error instanceof Error ? error.message : "Could not clear the voice signature.");
     }
   }, []);
 
@@ -414,8 +491,10 @@ function App() {
     if (!text.trim()) return;
     if (speaker === "interviewer") {
       considerQuestion(text, "audio");
-    } else {
+    } else if (speaker === "you") {
       setYourSpeech(text);
+    } else {
+      setUnidentifiedSpeech(text);
     }
     if (language) setAudioLanguage(language);
   }, [considerQuestion]);
@@ -426,8 +505,12 @@ function App() {
       .then(async () => {
         if (generation !== captureGenerationRef.current) return;
         const wav = floatToWav(samples, sampleRate);
-        const result = await window.interviewAgent.transcribe(wav);
-        if (generation === captureGenerationRef.current) appendHeard(result.text, result.language, speaker);
+        const identifySpeaker = speaker === "mixed";
+        const result = await window.interviewAgent.transcribe(wav, identifySpeaker);
+        const identifiedSpeaker: AudioSpeaker = identifySpeaker
+          ? result.speaker || "unknown"
+          : speaker;
+        if (generation === captureGenerationRef.current) appendHeard(result.text, result.language, identifiedSpeaker);
       })
       .catch(() => {
         if (generation === captureGenerationRef.current) {
@@ -506,54 +589,66 @@ function App() {
   }, [considerQuestion]);
 
   const startCapture = useCallback(async (mode: CaptureMode) => {
-    if (!selectedSource) throw new Error(mode === "external-call" ? "Choose the call window or display so its audio can be separated from your microphone." : "Choose a screen or window first.");
+    if (mode === "screen" && !selectedSource) throw new Error("Choose a screen or window first.");
+    if (mode === "external-call" && (!services.speakerRecognition || !services.voiceProfile)) {
+      throw new Error("Record your voice sample before starting external call mode.");
+    }
     setSessionNotice("");
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
-    void audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions; screen text capture remains available."));
-    const display = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: { ideal: 5, max: 10 } },
-      audio: true,
-    });
-    screenStreamRef.current = display;
-    if (videoRef.current) {
-      videoRef.current.srcObject = display;
-      await videoRef.current.play();
+    void audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check microphone permissions."));
+
+    let display: MediaStream | null = null;
+    if (mode === "screen") {
+      display = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 5, max: 10 } },
+        audio: true,
+      });
+      screenStreamRef.current = display;
+      if (videoRef.current) {
+        videoRef.current.srcObject = display;
+        await videoRef.current.play();
+      }
     }
 
     let mic: MediaStream | null = null;
     try {
       mic = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: mode === "external-call"
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+          : { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         video: false,
       });
       micStreamRef.current = mic;
     } catch {
+      if (mode === "external-call") throw new Error("Microphone permission is required for external call mode.");
       setSessionNotice("Microphone permission was unavailable; listening to shared system audio only.");
     }
 
     if (audioContext.state === "suspended") {
-      await audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions; screen text capture remains available."));
+      await audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions."));
     }
-    const systemTrack = display.getAudioTracks()[0];
-    const microphoneTrack = mic?.getAudioTracks()[0];
+    const systemTrack = display?.getAudioTracks()[0] || null;
+    const microphoneTrack = mic?.getAudioTracks()[0] || null;
+    if (mode === "external-call" && !microphoneTrack) throw new Error("Microphone permission is required for external call mode.");
     const hasAudio = Boolean(systemTrack || microphoneTrack);
-    setCallAudioAvailable(Boolean(systemTrack));
     setMicrophoneAvailable(Boolean(microphoneTrack));
     setAudioAvailable(hasAudio);
-    if (!systemTrack && mode === "external-call") {
-      setSessionNotice("Call audio is not reaching this computer. Your mic is active, but speaker labels and question answers need the call playing through this computer.");
-    } else if (!systemTrack && mode === "screen") {
+    if (!systemTrack && mode === "screen") {
       setSessionNotice("System audio was not available for the selected screen. Microphone and screen text remain active.");
     }
-    if (!microphoneTrack) {
-      setSessionNotice("Microphone permission was unavailable; your speech cannot be separated from call audio.");
+    if (!microphoneTrack && mode === "screen" && systemTrack) {
+      setSessionNotice("Microphone permission was unavailable; listening to system audio only.");
     }
     if (!hasAudio) setSessionNotice("No audio source is available. Screen text capture remains active.");
 
     const merger = audioContext.createChannelMerger(2);
-    if (systemTrack) audioContext.createMediaStreamSource(new MediaStream([systemTrack])).connect(merger, 0, 0);
-    if (microphoneTrack) audioContext.createMediaStreamSource(new MediaStream([microphoneTrack])).connect(merger, 0, 1);
+    if (mode === "external-call" && microphoneTrack) {
+      audioContext.createMediaStreamSource(new MediaStream([microphoneTrack])).connect(merger, 0, 0);
+    } else {
+      if (systemTrack) audioContext.createMediaStreamSource(new MediaStream([systemTrack])).connect(merger, 0, 0);
+      if (microphoneTrack) audioContext.createMediaStreamSource(new MediaStream([microphoneTrack])).connect(merger, 0, 1);
+    }
     const processor = audioContext.createScriptProcessor(4096, 2, 2);
     const silent = audioContext.createGain();
     silent.gain.value = 0;
@@ -565,10 +660,12 @@ function App() {
     const pipelines: Record<AudioSpeaker, UtterancePipeline> = {
       interviewer: createUtterancePipeline(),
       you: createUtterancePipeline(),
+      mixed: createUtterancePipeline(),
+      unknown: createUtterancePipeline(),
     };
     const captureGeneration = ++captureGenerationRef.current;
     activeCaptureRef.current = true;
-    sourceSignalRef.current = { interviewer: false, you: false };
+    sourceSignalRef.current = { interviewer: false, you: false, mixed: false, unknown: false };
     setAudioSignal(false);
 
     const processAudioChannel = (channel: Float32Array, speaker: AudioSpeaker) => {
@@ -588,7 +685,7 @@ function App() {
       } else if (pipeline.signalActive && now - pipeline.lastSpeechAt > 1500) {
         pipeline.signalActive = false;
         sourceSignalRef.current[speaker] = false;
-        setAudioSignal(sourceSignalRef.current.interviewer || sourceSignalRef.current.you);
+        setAudioSignal(Object.values(sourceSignalRef.current).some(Boolean));
       }
 
       if (!pipeline.speechActive) {
@@ -637,8 +734,12 @@ function App() {
 
     processor.onaudioprocess = (event) => {
       if (!activeCaptureRef.current) return;
-      processAudioChannel(event.inputBuffer.getChannelData(0), "interviewer");
-      processAudioChannel(event.inputBuffer.getChannelData(1), "you");
+      if (mode === "external-call") {
+        processAudioChannel(event.inputBuffer.getChannelData(0), "mixed");
+      } else {
+        processAudioChannel(event.inputBuffer.getChannelData(0), "interviewer");
+        processAudioChannel(event.inputBuffer.getChannelData(1), "you");
+      }
     };
 
     if (mode === "screen") {
@@ -650,9 +751,9 @@ function App() {
       if (ocrTimerRef.current !== null) window.clearInterval(ocrTimerRef.current);
       ocrTimerRef.current = window.setInterval(() => { void inspectScreen(); }, 1500);
     } else {
-      setOcrProgress("Screen reading is off in external call mode");
+      setOcrProgress("Speaker identification is running locally");
     }
-    display.getTracks().forEach((track) => {
+    display?.getTracks().forEach((track) => {
       track.addEventListener("ended", () => {
         if (activeCaptureRef.current) {
           void stopCaptureRef.current().then(() => {
@@ -662,7 +763,7 @@ function App() {
         }
       }, { once: true });
     });
-  }, [inspectScreen, selectedSource, startScreenReader, transcribeWindow]);
+  }, [inspectScreen, selectedSource, services.speakerRecognition, services.voiceProfile, startScreenReader, transcribeWindow]);
 
   const stopCapture = useCallback(async () => {
     activeCaptureRef.current = false;
@@ -685,9 +786,8 @@ function App() {
     const worker = ocrWorkerRef.current;
     ocrWorkerRef.current = null;
     if (worker) await worker.terminate();
-    sourceSignalRef.current = { interviewer: false, you: false };
+    sourceSignalRef.current = { interviewer: false, you: false, mixed: false, unknown: false };
     setAudioSignal(false);
-    setCallAudioAvailable(false);
     setMicrophoneAvailable(false);
     setAudioAvailable(false);
     setOcrProgress("");
@@ -700,6 +800,10 @@ function App() {
       setSourceError("Start the local model and transcription services first.");
       return;
     }
+    if (captureMode === "external-call" && (!services.speakerRecognition || !services.voiceProfile)) {
+      setSourceError("Install local speaker matching and record your voice sample first.");
+      return;
+    }
     try {
       localStorage.setItem(CONTEXT_KEY, JSON.stringify({ resume, jobDescription }));
       await startCapture(captureMode);
@@ -709,7 +813,7 @@ function App() {
       await stopCapture();
       setSourceError(error instanceof Error ? error.message : "Could not start screen and audio capture.");
     }
-  }, [captureMode, jobDescription, resume, services.model, services.transcription, startCapture, stopCapture]);
+  }, [captureMode, jobDescription, resume, services.model, services.transcription, services.speakerRecognition, services.voiceProfile, startCapture, stopCapture]);
 
   const pauseSession = useCallback(async () => {
     await stopCapture();
@@ -738,6 +842,7 @@ function App() {
     setActiveQuestion("");
     activeQuestionRef.current = "";
     setYourSpeech("");
+    setUnidentifiedSpeech("");
     setAnswer("");
     answerRef.current = "";
     setAudioAvailable(false);
@@ -822,12 +927,12 @@ function App() {
             <span className={`live-badge ${sessionState === "live" ? "" : "paused"}`}>
               {sessionState === "live" ? <><span className="live-pulse" /> LIVE</> : <><Pause size={11} /> PAUSED</>}
             </span>
-            <span className="capture-state"><MonitorUp size={14} /> {sessionState === "live"
-              ? captureMode === "external-call" ? (callAudioAvailable ? "Call audio connected" : "Call audio unavailable") : "Screen captured"
-              : captureMode === "external-call" ? "Call audio paused" : "Screen paused"}</span>
+            <span className="capture-state">{captureMode === "external-call" ? <Mic size={14} /> : <MonitorUp size={14} />} {sessionState === "live"
+              ? captureMode === "external-call" ? "Mixed microphone audio" : "Screen captured"
+              : captureMode === "external-call" ? "Microphone paused" : "Screen paused"}</span>
             <span className="capture-state"><Headphones size={14} /> {sessionState === "live"
               ? captureMode === "external-call"
-                ? microphoneAvailable ? (audioSignal ? "Call and mic listening" : "Your mic ready") : "Microphone unavailable"
+                ? microphoneAvailable ? (audioSignal ? "Voices detected" : "Listening for both speakers") : "Microphone unavailable"
                 : audioAvailable ? (audioSignal ? "Audio signal detected" : "Audio listening") : "Audio unavailable"
               : "Audio paused"}</span>
           </div>
@@ -841,10 +946,17 @@ function App() {
 
           {captureMode === "external-call" && (
             <section className="overlay-section you-section">
-              <div className="section-heading"><span>You · Microphone</span><span className="subtle-heading">{microphoneAvailable ? "Separate audio channel" : "Not connected"}</span></div>
+              <div className="section-heading"><span>You · Microphone</span><span className="subtle-heading">{microphoneAvailable ? "Voice matched" : "Not connected"}</span></div>
               <p className={`transcript-text ${yourSpeech ? "" : "empty-copy"}`}>
-                {yourSpeech || "Your speech appears here and is not treated as an interviewer question."}
+                {yourSpeech || "Your microphone speech will appear here after voice matching."}
               </p>
+            </section>
+          )}
+
+          {captureMode === "external-call" && unidentifiedSpeech && (
+            <section className="overlay-section you-section">
+              <div className="section-heading"><span>Uncertain speaker</span><span className="subtle-heading">Not used to draft an answer</span></div>
+              <p className="transcript-text">{unidentifiedSpeech}</p>
             </section>
           )}
 
@@ -957,17 +1069,35 @@ function App() {
           </div>
           <div className="capture-setup-heading">
             <div>
-              <span className="field-label">{captureMode === "external-call" ? "Call audio and microphone" : "Screen and audio"}</span>
+              <span className="field-label">{captureMode === "external-call" ? "Microphone and speaker matching" : "Screen and audio"}</span>
               <p>{captureMode === "external-call"
-                ? "Select the call app or display that plays interviewer audio. Call output is labeled Interviewer; your microphone is labeled You. Use headphones for clean separation."
+                ? "Both voices are captured from the same microphone. Record your voice sample below; local speaker matching labels your voice You and the other speaking voice Interviewer. No screen or call-audio source is needed. Overlapping speech can be uncertain."
                 : "Choose a window or display. Its audio is separated from your microphone, and screen text is read locally. The overlay remains visible in screen capture."}</p>
             </div>
-            <button className="button button-outline button-small" onClick={() => void refreshSources()} disabled={sourceBusy}>
-              {sourceBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Refresh
-            </button>
+            {captureMode === "screen" && (
+              <button className="button button-outline button-small" onClick={() => void refreshSources()} disabled={sourceBusy}>
+                {sourceBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Refresh
+              </button>
+            )}
           </div>
 
-          {sources.length ? (
+          {captureMode === "external-call" ? (
+            <div className="voice-enrollment">
+              <div className="voice-enrollment-copy">
+                <strong>{services.voiceProfile ? "Voice sample saved" : "Record your voice sample"}</strong>
+                <span>Speak naturally for {VOICE_SAMPLE_SECONDS} seconds. Only the voice signature is saved on this device; the audio sample is discarded.</span>
+                {!services.speakerRecognition && <span className="voice-notice">Run setup-interview-agent.ps1 to install local speaker matching.</span>}
+                {voiceNotice && <span className={`voice-notice ${/could not|timed out|permission|run setup/i.test(voiceNotice) ? "error" : ""}`}>{voiceNotice}</span>}
+              </div>
+              <div className="voice-enrollment-actions">
+                <button className="button button-outline button-small" onClick={() => void enrollVoice()} disabled={voiceEnrollmentBusy || !services.speakerRecognition}>
+                  {voiceEnrollmentBusy ? <LoaderCircle className="spin" size={14} /> : <Mic size={14} />}
+                  {voiceEnrollmentBusy ? "Recording…" : services.voiceProfile ? "Re-record" : "Record voice"}
+                </button>
+                {services.voiceProfile && <button className="button button-outline button-small voice-clear" onClick={() => void clearVoiceProfile()} disabled={voiceEnrollmentBusy} title="Clear saved voice signature"><Trash2 size={13} /></button>}
+              </div>
+            </div>
+          ) : sources.length ? (
             <div className="source-list">
               {sources.map((source) => (
                 <button
@@ -982,15 +1112,16 @@ function App() {
               ))}
             </div>
           ) : (
-            <div className="source-empty"><MonitorUp size={18} /><span>{captureMode === "external-call" ? "Call app and display choices will appear here." : "Screen and window choices will appear here."}</span></div>
+            <div className="source-empty"><MonitorUp size={18} /><span>Screen and window choices will appear here.</span></div>
           )}
           {sourceError && <p className="inline-error">{sourceError}</p>}
         </section>
 
         <section className="services-row">
-          <div className="services-title"><span>Local services</span><button className="help-button" title="The local model drafts suggestions; offline Whisper transcribes audio."><CircleHelp size={14} /></button></div>
+          <div className="services-title"><span>Local services</span><button className="help-button" title="The local model drafts suggestions; offline speech and speaker matching run on this PC."><CircleHelp size={14} /></button></div>
           <div className="service-state"><StatusDot ready={services.model} /><span>Answer model</span><strong>{services.model ? "Ready" : "Start coding server"}</strong></div>
           <div className="service-state"><StatusDot ready={services.transcription} /><span>Transcription</span><strong>{services.transcription ? "Ready" : "Start interview app"}</strong></div>
+          <div className="service-state"><StatusDot ready={services.speakerRecognition} /><span>Speaker ID</span><strong>{!services.speakerRecognition ? "Run setup" : services.voiceProfile ? "Voice saved" : "Record sample"}</strong></div>
         </section>
 
         <footer className="prepare-footer">
@@ -1000,7 +1131,11 @@ function App() {
             <button
               className="button button-primary"
               onClick={() => void beginSession()}
-              disabled={!resume.trim() || !selectedSource || !services.model || !services.transcription}
+              disabled={!resume.trim()
+                || (captureMode === "screen" && !selectedSource)
+                || (captureMode === "external-call" && (!services.speakerRecognition || !services.voiceProfile))
+                || !services.model
+                || !services.transcription}
             >
               Start session <ChevronRight size={16} />
             </button>
