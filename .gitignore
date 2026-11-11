@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+interview-agent/node_modules/
+interview-agent/.venv/
+interview-agent/dist/
+interview-agent/public/tesseract/
+interview-agent/public/pdf.worker.mjs

@@ -31,6 +31,24 @@ Two ways to use it:
 
 **Standalone (UI-TARS Desktop).** Run the installer from `%LOCALAPPDATA%\local-agent\downloads` (the setup script downloads it but does not auto-install it), run `.\start-computer-use.ps1`, and in the app's settings point it at the local endpoint: base URL `http://127.0.0.1:8081/v1`, model `ui-tars-1.5-7b`, any non-empty API key.
 
+## Interview Copilot
+
+An optional local desktop companion can load resume and role context, capture a selected screen/window and its system audio, transcribe English speech with Whisper on the CPU, read visible text with offline OCR, and show answer suggestions in a floating window. Suggestions use the local llama.cpp model and remain on this PC. The overlay is **not hidden from screen capture or sharing**.
+
+Install once from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup-interview-agent.ps1
+```
+
+For each session, run `.\start-coding.ps1` and leave it open, then in another PowerShell window run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start-interview-agent.ps1
+```
+
+Paste or drop a resume and job description, choose the screen/window, and start the session. The first install downloads the offline English transcription model and OCR files. Capture begins only after you choose a screen and start the session; pause or end it in the overlay to stop audio and screen processing.
+
 ## Phone remote control
 
 OpenCode is client-server, so your phone can drive the same sessions from a browser. With the model server running, run `.\start-remote.ps1` instead of opening OpenCode normally. It starts OpenCode headless on port 4096 behind a password (generated once, stored in `%LOCALAPPDATA%\local-agent\opencode-password.txt`), tries to open the firewall with the same scoping as the model server, and prints the URLs. On the phone: Tailscale app on, open the Tailscale URL, sign in as `opencode` with that password. You get the full interface — prompts, tool approvals, live output — while everything still executes on this PC. Desktop and phone can be attached to the same sessions at once.
