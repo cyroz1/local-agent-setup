@@ -24,6 +24,18 @@ type Source = { id: string; name: string; thumbnail: string };
 type Services = { model: boolean; transcription: boolean };
 type SessionState = "prepare" | "live" | "paused";
 type ContextField = "resume" | "jobDescription";
+type CaptureMode = "screen" | "external-call";
+type AudioSpeaker = "interviewer" | "you";
+
+type UtterancePipeline = {
+  preRollChunks: Float32Array[];
+  preRollSamples: number;
+  speechChunks: Float32Array[];
+  speechSamples: number;
+  speechActive: boolean;
+  lastSpeechAt: number;
+  signalActive: boolean;
+};
 
 const CONTEXT_KEY = "interview-copilot-context-v1";
 const OPACITY_KEY = "interview-copilot-overlay-opacity-v1";
@@ -178,6 +190,18 @@ function takeSamples(chunks: Float32Array[], count: number) {
   return output;
 }
 
+function createUtterancePipeline(): UtterancePipeline {
+  return {
+    preRollChunks: [],
+    preRollSamples: 0,
+    speechChunks: [],
+    speechSamples: 0,
+    speechActive: false,
+    lastSpeechAt: 0,
+    signalActive: false,
+  };
+}
+
 async function extractDocumentText(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (extension === "txt" || extension === "md") return file.text();
@@ -217,10 +241,12 @@ function App() {
   const [selectedSource, setSelectedSource] = useState("");
   const [services, setServices] = useState<Services>({ model: false, transcription: false });
   const [sessionState, setSessionState] = useState<SessionState>("prepare");
+  const [captureMode, setCaptureMode] = useState<CaptureMode>("screen");
   const [overlayOpacity, setOverlayOpacity] = useState(loadOverlayOpacity);
   const [clickThrough, setClickThrough] = useState(false);
   const [screenText, setScreenText] = useState("");
   const [activeQuestion, setActiveQuestion] = useState("");
+  const [yourSpeech, setYourSpeech] = useState("");
   const [answer, setAnswer] = useState("");
   const answerRef = useRef("");
   const [answerBusy, setAnswerBusy] = useState(false);
@@ -233,6 +259,8 @@ function App() {
   const [ocrProgress, setOcrProgress] = useState("");
   const [audioLanguage, setAudioLanguage] = useState("");
   const [audioAvailable, setAudioAvailable] = useState(false);
+  const [callAudioAvailable, setCallAudioAvailable] = useState(false);
+  const [microphoneAvailable, setMicrophoneAvailable] = useState(false);
   const [audioSignal, setAudioSignal] = useState(false);
   const [showContext, setShowContext] = useState(false);
 
@@ -244,15 +272,9 @@ function App() {
   const muteRef = useRef<GainNode | null>(null);
   const ocrWorkerRef = useRef<Awaited<ReturnType<typeof createWorker>> | null>(null);
   const ocrTimerRef = useRef<number | null>(null);
-  const preRollChunksRef = useRef<Float32Array[]>([]);
-  const preRollSamplesRef = useRef(0);
-  const speechChunksRef = useRef<Float32Array[]>([]);
-  const speechSamplesRef = useRef(0);
-  const speechActiveRef = useRef(false);
   const captureGenerationRef = useRef(0);
   const transcriptionQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const audioSignalRef = useRef(false);
-  const lastAudioSignalAtRef = useRef(0);
+  const sourceSignalRef = useRef<Record<AudioSpeaker, boolean>>({ interviewer: false, you: false });
   const activeCaptureRef = useRef(false);
   const ocrBusyRef = useRef(false);
   const lastQuestionRef = useRef("");
@@ -388,20 +410,24 @@ function App() {
     void requestAnswer(question);
   }, [requestAnswer]);
 
-  const appendHeard = useCallback((text: string, language?: string) => {
+  const appendHeard = useCallback((text: string, language: string | undefined, speaker: AudioSpeaker) => {
     if (!text.trim()) return;
-    considerQuestion(text, "audio");
+    if (speaker === "interviewer") {
+      considerQuestion(text, "audio");
+    } else {
+      setYourSpeech(text);
+    }
     if (language) setAudioLanguage(language);
   }, [considerQuestion]);
 
-  const transcribeWindow = useCallback((samples: Float32Array, sampleRate: number, generation: number) => {
+  const transcribeWindow = useCallback((samples: Float32Array, sampleRate: number, generation: number, speaker: AudioSpeaker) => {
     if (samples.length < sampleRate * 0.35) return;
     transcriptionQueueRef.current = transcriptionQueueRef.current
       .then(async () => {
         if (generation !== captureGenerationRef.current) return;
         const wav = floatToWav(samples, sampleRate);
         const result = await window.interviewAgent.transcribe(wav);
-        if (generation === captureGenerationRef.current) appendHeard(result.text, result.language);
+        if (generation === captureGenerationRef.current) appendHeard(result.text, result.language, speaker);
       })
       .catch(() => {
         if (generation === captureGenerationRef.current) {
@@ -479,8 +505,8 @@ function App() {
     }
   }, [considerQuestion]);
 
-  const startCapture = useCallback(async () => {
-    if (!selectedSource) throw new Error("Choose a screen or window first.");
+  const startCapture = useCallback(async (mode: CaptureMode) => {
+    if (!selectedSource) throw new Error(mode === "external-call" ? "Choose the call window or display so its audio can be separated from your microphone." : "Choose a screen or window first.");
     setSessionNotice("");
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
@@ -509,109 +535,123 @@ function App() {
     if (audioContext.state === "suspended") {
       await audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions; screen text capture remains available."));
     }
-    const mix = audioContext.createGain();
     const systemTrack = display.getAudioTracks()[0];
-    const hasAudio = Boolean(systemTrack || mic?.getAudioTracks().length);
+    const microphoneTrack = mic?.getAudioTracks()[0];
+    const hasAudio = Boolean(systemTrack || microphoneTrack);
+    setCallAudioAvailable(Boolean(systemTrack));
+    setMicrophoneAvailable(Boolean(microphoneTrack));
     setAudioAvailable(hasAudio);
-    if (systemTrack) {
-      audioContext.createMediaStreamSource(new MediaStream([systemTrack])).connect(mix);
-    } else {
-      setSessionNotice("System audio was not available for the selected screen. Checking microphone and screen text.");
+    if (!systemTrack && mode === "external-call") {
+      setSessionNotice("Call audio is not reaching this computer. Your mic is active, but speaker labels and question answers need the call playing through this computer.");
+    } else if (!systemTrack && mode === "screen") {
+      setSessionNotice("System audio was not available for the selected screen. Microphone and screen text remain active.");
     }
-    mic?.getAudioTracks().forEach((track) => {
-      audioContext.createMediaStreamSource(new MediaStream([track])).connect(mix);
-    });
+    if (!microphoneTrack) {
+      setSessionNotice("Microphone permission was unavailable; your speech cannot be separated from call audio.");
+    }
     if (!hasAudio) setSessionNotice("No audio source is available. Screen text capture remains active.");
 
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
+    const merger = audioContext.createChannelMerger(2);
+    if (systemTrack) audioContext.createMediaStreamSource(new MediaStream([systemTrack])).connect(merger, 0, 0);
+    if (microphoneTrack) audioContext.createMediaStreamSource(new MediaStream([microphoneTrack])).connect(merger, 0, 1);
+    const processor = audioContext.createScriptProcessor(4096, 2, 2);
     const silent = audioContext.createGain();
     silent.gain.value = 0;
-    mix.connect(processor);
+    merger.connect(processor);
     processor.connect(silent);
     silent.connect(audioContext.destination);
     processorRef.current = processor;
     muteRef.current = silent;
-    preRollChunksRef.current = [];
-    preRollSamplesRef.current = 0;
-    speechChunksRef.current = [];
-    speechSamplesRef.current = 0;
-    speechActiveRef.current = false;
+    const pipelines: Record<AudioSpeaker, UtterancePipeline> = {
+      interviewer: createUtterancePipeline(),
+      you: createUtterancePipeline(),
+    };
     const captureGeneration = ++captureGenerationRef.current;
     activeCaptureRef.current = true;
-    audioSignalRef.current = false;
-    lastAudioSignalAtRef.current = 0;
+    sourceSignalRef.current = { interviewer: false, you: false };
     setAudioSignal(false);
 
-    processor.onaudioprocess = (event) => {
-      if (!activeCaptureRef.current) return;
-      const incoming = new Float32Array(event.inputBuffer.getChannelData(0));
+    const processAudioChannel = (channel: Float32Array, speaker: AudioSpeaker) => {
+      const pipeline = pipelines[speaker];
+      const incoming = new Float32Array(channel);
       let energy = 0;
       for (let index = 0; index < incoming.length; index += 4) energy += incoming[index] * incoming[index];
       const rms = Math.sqrt(energy / Math.max(1, Math.ceil(incoming.length / 4)));
       const now = Date.now();
       if (rms > SPEECH_RMS_THRESHOLD) {
-        lastAudioSignalAtRef.current = now;
-        if (!audioSignalRef.current) {
-          audioSignalRef.current = true;
+        pipeline.lastSpeechAt = now;
+        if (!pipeline.signalActive) {
+          pipeline.signalActive = true;
+          sourceSignalRef.current[speaker] = true;
           setAudioSignal(true);
         }
-      } else if (audioSignalRef.current && now - lastAudioSignalAtRef.current > 1500) {
-        audioSignalRef.current = false;
-        setAudioSignal(false);
+      } else if (pipeline.signalActive && now - pipeline.lastSpeechAt > 1500) {
+        pipeline.signalActive = false;
+        sourceSignalRef.current[speaker] = false;
+        setAudioSignal(sourceSignalRef.current.interviewer || sourceSignalRef.current.you);
       }
 
-      if (!speechActiveRef.current) {
-        preRollChunksRef.current.push(incoming);
-        preRollSamplesRef.current += incoming.length;
+      if (!pipeline.speechActive) {
+        pipeline.preRollChunks.push(incoming);
+        pipeline.preRollSamples += incoming.length;
         const maxPreRollSamples = Math.floor(audioContext.sampleRate * SPEECH_PREROLL_SECONDS);
-        let excessSamples = preRollSamplesRef.current - maxPreRollSamples;
-        while (excessSamples > 0 && preRollChunksRef.current.length) {
-          const first = preRollChunksRef.current[0];
+        let excessSamples = pipeline.preRollSamples - maxPreRollSamples;
+        while (excessSamples > 0 && pipeline.preRollChunks.length) {
+          const first = pipeline.preRollChunks[0];
           if (first.length <= excessSamples) {
-            preRollChunksRef.current.shift();
-            preRollSamplesRef.current -= first.length;
+            pipeline.preRollChunks.shift();
+            pipeline.preRollSamples -= first.length;
             excessSamples -= first.length;
           } else {
-            preRollChunksRef.current[0] = first.slice(excessSamples);
-            preRollSamplesRef.current -= excessSamples;
+            pipeline.preRollChunks[0] = first.slice(excessSamples);
+            pipeline.preRollSamples -= excessSamples;
             excessSamples = 0;
           }
         }
 
         if (rms > SPEECH_RMS_THRESHOLD) {
-          speechActiveRef.current = true;
-          speechChunksRef.current = preRollChunksRef.current;
-          speechSamplesRef.current = preRollSamplesRef.current;
-          preRollChunksRef.current = [];
-          preRollSamplesRef.current = 0;
-          lastAudioSignalAtRef.current = now;
+          pipeline.speechActive = true;
+          pipeline.speechChunks = pipeline.preRollChunks;
+          pipeline.speechSamples = pipeline.preRollSamples;
+          pipeline.preRollChunks = [];
+          pipeline.preRollSamples = 0;
         }
         return;
       }
 
-      speechChunksRef.current.push(incoming);
-      speechSamplesRef.current += incoming.length;
+      pipeline.speechChunks.push(incoming);
+      pipeline.speechSamples += incoming.length;
       const silenceEnded = rms <= SPEECH_RMS_THRESHOLD
-        && now - lastAudioSignalAtRef.current >= SPEECH_END_SILENCE_MS;
-      const maxUtteranceReached = speechSamplesRef.current >= audioContext.sampleRate * MAX_UTTERANCE_SECONDS;
+        && now - pipeline.lastSpeechAt >= SPEECH_END_SILENCE_MS;
+      const maxUtteranceReached = pipeline.speechSamples >= audioContext.sampleRate * MAX_UTTERANCE_SECONDS;
       if (silenceEnded || maxUtteranceReached) {
-        const utterance = takeSamples(speechChunksRef.current, speechSamplesRef.current);
-        speechChunksRef.current = [];
-        speechSamplesRef.current = 0;
-        speechActiveRef.current = false;
-        preRollChunksRef.current = [];
-        preRollSamplesRef.current = 0;
-        transcribeWindow(utterance, audioContext.sampleRate, captureGeneration);
+        const utterance = takeSamples(pipeline.speechChunks, pipeline.speechSamples);
+        pipeline.speechChunks = [];
+        pipeline.speechSamples = 0;
+        pipeline.speechActive = false;
+        pipeline.preRollChunks = [];
+        pipeline.preRollSamples = 0;
+        transcribeWindow(utterance, audioContext.sampleRate, captureGeneration, speaker);
       }
     };
 
-    try {
-      await startScreenReader();
-    } catch {
-      setOcrProgress("Offline screen reader files are missing. Run setup-interview-agent.ps1 again.");
+    processor.onaudioprocess = (event) => {
+      if (!activeCaptureRef.current) return;
+      processAudioChannel(event.inputBuffer.getChannelData(0), "interviewer");
+      processAudioChannel(event.inputBuffer.getChannelData(1), "you");
+    };
+
+    if (mode === "screen") {
+      try {
+        await startScreenReader();
+      } catch {
+        setOcrProgress("Offline screen reader files are missing. Run setup-interview-agent.ps1 again.");
+      }
+      if (ocrTimerRef.current !== null) window.clearInterval(ocrTimerRef.current);
+      ocrTimerRef.current = window.setInterval(() => { void inspectScreen(); }, 1500);
+    } else {
+      setOcrProgress("Screen reading is off in external call mode");
     }
-    if (ocrTimerRef.current !== null) window.clearInterval(ocrTimerRef.current);
-    ocrTimerRef.current = window.setInterval(() => { void inspectScreen(); }, 1500);
     display.getTracks().forEach((track) => {
       track.addEventListener("ended", () => {
         if (activeCaptureRef.current) {
@@ -645,14 +685,11 @@ function App() {
     const worker = ocrWorkerRef.current;
     ocrWorkerRef.current = null;
     if (worker) await worker.terminate();
-    preRollChunksRef.current = [];
-    preRollSamplesRef.current = 0;
-    speechChunksRef.current = [];
-    speechSamplesRef.current = 0;
-    speechActiveRef.current = false;
-    audioSignalRef.current = false;
-    lastAudioSignalAtRef.current = 0;
+    sourceSignalRef.current = { interviewer: false, you: false };
     setAudioSignal(false);
+    setCallAudioAvailable(false);
+    setMicrophoneAvailable(false);
+    setAudioAvailable(false);
     setOcrProgress("");
   }, []);
   stopCaptureRef.current = stopCapture;
@@ -665,14 +702,14 @@ function App() {
     }
     try {
       localStorage.setItem(CONTEXT_KEY, JSON.stringify({ resume, jobDescription }));
-      await startCapture();
+      await startCapture(captureMode);
       setSessionState("live");
       await window.interviewAgent.enterOverlay();
     } catch (error) {
       await stopCapture();
       setSourceError(error instanceof Error ? error.message : "Could not start screen and audio capture.");
     }
-  }, [jobDescription, resume, services.model, services.transcription, startCapture, stopCapture]);
+  }, [captureMode, jobDescription, resume, services.model, services.transcription, startCapture, stopCapture]);
 
   const pauseSession = useCallback(async () => {
     await stopCapture();
@@ -682,14 +719,14 @@ function App() {
 
   const resumeSession = useCallback(async () => {
     try {
-      await startCapture();
+      await startCapture(captureMode);
       setSessionState("live");
       setSessionNotice("");
     } catch (error) {
       await stopCapture();
       setSessionNotice(error instanceof Error ? error.message : "Could not resume capture.");
     }
-  }, [startCapture, stopCapture]);
+  }, [captureMode, startCapture, stopCapture]);
 
   const endSession = useCallback(async () => {
     await stopCapture();
@@ -700,6 +737,7 @@ function App() {
     screenTextRef.current = "";
     setActiveQuestion("");
     activeQuestionRef.current = "";
+    setYourSpeech("");
     setAnswer("");
     answerRef.current = "";
     setAudioAvailable(false);
@@ -784,16 +822,31 @@ function App() {
             <span className={`live-badge ${sessionState === "live" ? "" : "paused"}`}>
               {sessionState === "live" ? <><span className="live-pulse" /> LIVE</> : <><Pause size={11} /> PAUSED</>}
             </span>
-            <span className="capture-state"><MonitorUp size={14} /> {sessionState === "live" ? "Screen captured" : "Screen paused"}</span>
-            <span className="capture-state"><Headphones size={14} /> {sessionState === "live" ? (audioAvailable ? (audioSignal ? "Audio signal detected" : "Audio listening") : "Audio unavailable") : "Audio paused"}</span>
+            <span className="capture-state"><MonitorUp size={14} /> {sessionState === "live"
+              ? captureMode === "external-call" ? (callAudioAvailable ? "Call audio connected" : "Call audio unavailable") : "Screen captured"
+              : captureMode === "external-call" ? "Call audio paused" : "Screen paused"}</span>
+            <span className="capture-state"><Headphones size={14} /> {sessionState === "live"
+              ? captureMode === "external-call"
+                ? microphoneAvailable ? (audioSignal ? "Call and mic listening" : "Your mic ready") : "Microphone unavailable"
+                : audioAvailable ? (audioSignal ? "Audio signal detected" : "Audio listening") : "Audio unavailable"
+              : "Audio paused"}</span>
           </div>
 
           <section className="overlay-section heard-section">
-            <div className="section-heading"><span>Current question</span><span className="subtle-heading">{audioLanguage || (sessionState === "live" ? "Listening" : "Session paused")}</span></div>
+            <div className="section-heading"><span>{captureMode === "external-call" ? "Interviewer · Current question" : "Current question"}</span><span className="subtle-heading">{audioLanguage || (sessionState === "live" ? "Listening" : "Session paused")}</span></div>
             <p className={`transcript-text ${activeQuestion ? "" : "empty-copy"}`}>
               {activeQuestion || (sessionState === "live" ? "Listening for a complete question…" : "Resume when you're ready to continue.")}
             </p>
           </section>
+
+          {captureMode === "external-call" && (
+            <section className="overlay-section you-section">
+              <div className="section-heading"><span>You · Microphone</span><span className="subtle-heading">{microphoneAvailable ? "Separate audio channel" : "Not connected"}</span></div>
+              <p className={`transcript-text ${yourSpeech ? "" : "empty-copy"}`}>
+                {yourSpeech || "Your speech appears here and is not treated as an interviewer question."}
+              </p>
+            </section>
+          )}
 
           <section className="overlay-section answer-section">
             <div className="section-heading"><span>Suggested answer</span>{answerBusy && <LoaderCircle className="spin" size={15} />}</div>
@@ -890,10 +943,24 @@ function App() {
         </div>
 
         <section className="capture-setup">
+          <div className="capture-modes" role="group" aria-label="Interview capture mode">
+            <button
+              className={`capture-mode ${captureMode === "screen" ? "selected" : ""}`}
+              onClick={() => setCaptureMode("screen")}
+              aria-pressed={captureMode === "screen"}
+            >Screen interview</button>
+            <button
+              className={`capture-mode ${captureMode === "external-call" ? "selected" : ""}`}
+              onClick={() => setCaptureMode("external-call")}
+              aria-pressed={captureMode === "external-call"}
+            >External call</button>
+          </div>
           <div className="capture-setup-heading">
             <div>
-              <span className="field-label">Screen and audio</span>
-              <p>Choose a window or display. Screen, system audio, and mic stay local; the overlay is not hidden from capture or sharing.</p>
+              <span className="field-label">{captureMode === "external-call" ? "Call audio and microphone" : "Screen and audio"}</span>
+              <p>{captureMode === "external-call"
+                ? "Select the call app or display that plays interviewer audio. Call output is labeled Interviewer; your microphone is labeled You. Use headphones for clean separation."
+                : "Choose a window or display. Its audio is separated from your microphone, and screen text is read locally. The overlay remains visible in screen capture."}</p>
             </div>
             <button className="button button-outline button-small" onClick={() => void refreshSources()} disabled={sourceBusy}>
               {sourceBusy ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} Refresh
@@ -915,7 +982,7 @@ function App() {
               ))}
             </div>
           ) : (
-            <div className="source-empty"><MonitorUp size={18} /><span>Screen and window choices will appear here.</span></div>
+            <div className="source-empty"><MonitorUp size={18} /><span>{captureMode === "external-call" ? "Call app and display choices will appear here." : "Screen and window choices will appear here."}</span></div>
           )}
           {sourceError && <p className="inline-error">{sourceError}</p>}
         </section>
