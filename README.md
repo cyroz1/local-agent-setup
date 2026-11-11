@@ -35,6 +35,10 @@ Two ways to use it:
 
 An optional local desktop companion can load resume and role context, capture a selected screen/window and its system audio, transcribe English speech with Whisper on the CPU, read visible text with offline OCR, and show answer suggestions in a floating window. Suggestions use the local llama.cpp model and remain on this PC. The overlay is **not hidden from screen capture or sharing**.
 
+During a session, the overlay stays above other windows. Adjust its opacity from the title bar. The pointer button enables click-through for 20 seconds; press `Ctrl+Alt+Shift+O` to restore pointer input on Windows/Linux (`⌘⌥⇧O` on macOS). These controls do not change screen-capture visibility.
+
+For responsive suggestions, audio is transcribed in 2.4-second windows with 0.4-second overlap, answer generation starts after a 350 ms pause, and screen OCR checks every 1.5 seconds. Actual response time depends on speech clarity, machine load, and the local model.
+
 Install once from the repository root:
 
 ```powershell
@@ -47,7 +51,7 @@ For each session, run `.\start-coding.ps1` and leave it open, then in another Po
 powershell -ExecutionPolicy Bypass -File .\start-interview-agent.ps1
 ```
 
-Paste or drop a resume and job description, choose the screen/window, and start the session. The first install downloads the offline English transcription model and OCR files. Capture begins only after you choose a screen and start the session; pause or end it in the overlay to stop audio and screen processing.
+Paste or drop a resume, add a job description when available, choose the screen/window, and start the session. The job description is optional. The first install downloads the offline English transcription model and OCR files. Capture begins only after you choose a screen and start the session; pause or end it in the overlay to stop audio and screen processing.
 
 ## Phone remote control
 

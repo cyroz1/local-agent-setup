@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
+import io
 import os
-import tempfile
+import wave
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
+import numpy as np
 from faster_whisper import WhisperModel
 
 HOST = "127.0.0.1"
@@ -63,13 +64,20 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": "incomplete audio chunk"})
             return
 
-        temp_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as audio_file:
-                audio_file.write(audio)
-                temp_path = Path(audio_file.name)
+            with wave.open(io.BytesIO(audio), "rb") as wav_file:
+                if (
+                    wav_file.getnchannels() != 1
+                    or wav_file.getsampwidth() != 2
+                    or wav_file.getframerate() != 16000
+                    or wav_file.getcomptype() != "NONE"
+                ):
+                    self._send(400, {"error": "expected mono 16 kHz PCM audio"})
+                    return
+                samples = np.frombuffer(wav_file.readframes(wav_file.getnframes()), dtype=np.int16)
+                samples = samples.astype(np.float32) / 32768.0
             segments, info = model.transcribe(
-                str(temp_path),
+                samples,
                 language="en" if MODEL_NAME.endswith(".en") else None,
                 beam_size=1,
                 best_of=1,
@@ -82,12 +90,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # Keep audio data and full paths out of HTTP responses.
             print(f"Transcription error: {type(exc).__name__}: {exc}", flush=True)
             self._send(500, {"error": "local transcription failed"})
-        finally:
-            if temp_path is not None:
-                try:
-                    temp_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
 
     def log_message(self, _format: str, *_args) -> None:
         return

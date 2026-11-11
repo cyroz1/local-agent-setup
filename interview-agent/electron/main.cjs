@@ -1,4 +1,4 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain, screen, session } = require("electron");
+const { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, screen, session } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -7,6 +7,21 @@ const LLM_URL = "http://127.0.0.1:8080";
 const ASR_URL = "http://127.0.0.1:8765";
 let mainWindow;
 let selectedSourceId = null;
+let clickThroughEnabled = false;
+let clickThroughTimeout = null;
+const CLICK_THROUGH_TIMEOUT_MS = 20000;
+
+function setClickThrough(enabled) {
+  if (!mainWindow) return false;
+  clickThroughEnabled = Boolean(enabled);
+  mainWindow.setIgnoreMouseEvents(clickThroughEnabled, { forward: true });
+  if (clickThroughTimeout) clearTimeout(clickThroughTimeout);
+  clickThroughTimeout = clickThroughEnabled
+    ? setTimeout(() => setClickThrough(false), CLICK_THROUGH_TIMEOUT_MS)
+    : null;
+  mainWindow.webContents.send("window:click-through-changed", clickThroughEnabled);
+  return clickThroughEnabled;
+}
 
 function modelHeaders() {
   const headers = { "Content-Type": "application/json" };
@@ -26,7 +41,8 @@ function createWindow() {
     minHeight: 650,
     show: false,
     frame: false,
-    backgroundColor: "#f7f8f8",
+    transparent: true,
+    backgroundColor: "#00000000",
     title: "Interview Copilot",
     autoHideMenuBar: true,
     webPreferences: {
@@ -40,7 +56,12 @@ function createWindow() {
   mainWindow.loadURL(UI_URL);
   mainWindow.once("ready-to-show", () => mainWindow.show());
 
-  mainWindow.on("closed", () => { mainWindow = null; });
+  mainWindow.on("closed", () => {
+    if (clickThroughTimeout) clearTimeout(clickThroughTimeout);
+    clickThroughTimeout = null;
+    clickThroughEnabled = false;
+    mainWindow = null;
+  });
 }
 
 app.whenReady().then(() => {
@@ -90,6 +111,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("window:overlay", () => {
     if (!mainWindow) return;
+    setClickThrough(false);
     const { workArea } = screen.getDisplayMatching(mainWindow.getBounds());
     const width = 420;
     const height = Math.min(760, workArea.height - 48);
@@ -100,12 +122,15 @@ app.whenReady().then(() => {
       width,
       height,
     });
-    mainWindow.setAlwaysOnTop(true, "floating");
+    const topmostLevel = process.platform === "win32" ? "screen-saver" : "floating";
+    mainWindow.setAlwaysOnTop(true, topmostLevel);
     mainWindow.show();
+    mainWindow.moveTop();
   });
 
   ipcMain.handle("window:prepare", () => {
     if (!mainWindow) return;
+    setClickThrough(false);
     mainWindow.setAlwaysOnTop(false);
     mainWindow.setMinimumSize(780, 650);
     mainWindow.setBounds({ x: 120, y: 90, width: 1100, height: 790 });
@@ -114,6 +139,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle("window:minimize", () => mainWindow?.minimize());
   ipcMain.handle("window:close", () => mainWindow?.close());
+  ipcMain.handle("window:click-through", (_event, enabled) => setClickThrough(enabled));
   ipcMain.handle("services:check", async () => {
     const headers = modelHeaders();
     const [model, transcription] = await Promise.all([
@@ -148,16 +174,17 @@ app.whenReady().then(() => {
       signal: AbortSignal.timeout(120000),
       body: JSON.stringify({
         model: "k2-horizon-7b",
-        temperature: 0.35,
-        max_tokens: 260,
+        temperature: 0.2,
+        max_tokens: 384,
+        chat_template_kwargs: { reasoning_effort: "low" },
         messages: [
           {
             role: "system",
-            content: "You are a private interview preparation copilot. Draft a concise answer the candidate can review and express in their own words. Ground personal claims only in the resume. Tailor emphasis to the job description. Never make up employers, projects, numbers, skills, or outcomes. If the supplied material does not support a specific fact, say so briefly and offer an honest way to answer. Use first person, natural spoken language, usually 2 to 4 sentences. Return only the suggested answer.",
+            content: "Answer quickly with 2 to 3 natural first-person sentences. Use only facts and methods explicitly present in the resume; never infer what an analysis found, why a metric changed, or a process detail. For example, 'used funnel analysis' does not mean it revealed a particular drop-off. If the resume omits a requested detail, say that and leave a short [add verified detail] cue. Tailor emphasis to the job description without adding new facts. The question may come from live audio or noisy screen OCR; treat clear prompts such as 'Tell me about...' or 'Describe...' as questions even without punctuation. Do not repeat the question or explain your reasoning. Return only the answer sentences.",
           },
           {
             role: "user",
-            content: `RESUME\n${String(resume || "").slice(0, 18000)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 14000)}\n\nRECENT INTERVIEW AUDIO\n${String(transcript || "").slice(-5000)}\n\nVISIBLE SCREEN TEXT\n${String(screenText || "").slice(0, 5000)}\n\nSuggest a truthful answer to the latest interviewer question. If no clear question is present, give a short clarification or state that no question is clear yet.`,
+            content: `RESUME\n${String(resume || "").slice(0, 8000)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 5000)}\n\nRECENT INTERVIEW AUDIO\n${String(transcript || "").slice(-1200)}\n\nVISIBLE SCREEN TEXT\n${String(screenText || "").slice(0, 1600)}\n\nUse the clearest current question found in either source. Keep every claim grounded in the resume.`,
           },
         ],
       }),
@@ -168,7 +195,16 @@ app.whenReady().then(() => {
   });
 
   createWindow();
+  const clickThroughShortcut = process.platform === "darwin" ? "Command+Option+Shift+O" : "Control+Alt+Shift+O";
+  const shortcutRegistered = globalShortcut.register(clickThroughShortcut, () => {
+    if (mainWindow && (clickThroughEnabled || mainWindow.isAlwaysOnTop())) setClickThrough(!clickThroughEnabled);
+  });
+  console.log(`Click-through shortcut ${clickThroughShortcut}: ${shortcutRegistered ? "ready" : "unavailable"}`);
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 
+app.on("will-quit", () => {
+  if (clickThroughTimeout) clearTimeout(clickThroughTimeout);
+  globalShortcut.unregisterAll();
+});
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

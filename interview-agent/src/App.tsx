@@ -1,4 +1,4 @@
-import { ChangeEvent, DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   Check,
   ChevronDown,
@@ -16,6 +16,7 @@ import {
   Square,
   X,
   Minus,
+  MousePointer2,
 } from "lucide-react";
 import { createWorker, PSM } from "tesseract.js";
 
@@ -25,8 +26,10 @@ type SessionState = "prepare" | "live" | "paused";
 type ContextField = "resume" | "jobDescription";
 
 const CONTEXT_KEY = "interview-copilot-context-v1";
-const AUDIO_WINDOW_SECONDS = 6;
-const AUDIO_OVERLAP_SECONDS = 0.75;
+const OPACITY_KEY = "interview-copilot-overlay-opacity-v1";
+const AUDIO_WINDOW_SECONDS = 2.4;
+const AUDIO_OVERLAP_SECONDS = 0.8;
+const ANSWER_DEBOUNCE_MS = 350;
 
 function loadSavedContext() {
   try {
@@ -40,6 +43,11 @@ function loadSavedContext() {
   }
 }
 
+function loadOverlayOpacity() {
+  const saved = Number(localStorage.getItem(OPACITY_KEY));
+  return Number.isFinite(saved) && saved >= 65 && saved <= 100 ? saved : 92;
+}
+
 function mergeTranscript(previous: string, next: string) {
   const prior = previous.trim();
   const incoming = next.trim();
@@ -50,7 +58,7 @@ function mergeTranscript(previous: string, next: string) {
   const oldWords = prior.split(/\s+/);
   const newWords = incoming.split(/\s+/);
   const maxOverlap = Math.min(oldWords.length, newWords.length, 16);
-  for (let count = maxOverlap; count >= 2; count -= 1) {
+  for (let count = maxOverlap; count >= 1; count -= 1) {
     const oldTail = oldWords.slice(-count).join(" ").toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
     const newHead = newWords.slice(0, count).join(" ").toLowerCase().replace(/[^\p{L}\p{N}' ]/gu, "");
     if (oldTail === newHead) return `${prior} ${newWords.slice(count).join(" ")}`.trim();
@@ -60,6 +68,24 @@ function mergeTranscript(previous: string, next: string) {
 
 function questionLike(text: string) {
   return /\?|\b(can you tell me|tell me about|walk me through|describe|how would you|what would you|why do you|what is your|how did you|give me an example)\b/i.test(text);
+}
+
+function normalizeForMatch(text: string) {
+  return text.toLowerCase().match(/[\p{L}\p{N}']+/gu)?.join(" ") || "";
+}
+
+function similarSignature(left: string, right: string) {
+  if (!left || !right) return false;
+  const leftWords = new Set(left.split(" "));
+  const rightWords = new Set(right.split(" "));
+  let shared = 0;
+  leftWords.forEach((word) => { if (rightWords.has(word)) shared += 1; });
+  const union = leftWords.size + rightWords.size - shared;
+  return union > 0 && shared / union >= 0.86;
+}
+
+function looksLikeQuestionEcho(text: string) {
+  return /^(?:tell me about|describe|walk me through|can you tell me|what is your|what did you|what would you|how did you|how would you|why did you|why do you|give me an example)\b/i.test(text.trim());
 }
 
 function floatToWav(samples: Float32Array, sourceRate: number, targetRate = 16000) {
@@ -139,6 +165,7 @@ function StatusDot({ ready }: { ready: boolean }) {
 }
 
 function App() {
+  const clickThroughShortcut = navigator.platform.startsWith("Mac") ? "⌘⌥⇧O" : "Ctrl+Alt+Shift+O";
   const savedContext = useRef(loadSavedContext()).current;
   const [resume, setResume] = useState<string>(savedContext.resume);
   const [jobDescription, setJobDescription] = useState<string>(savedContext.jobDescription);
@@ -146,11 +173,15 @@ function App() {
   const [selectedSource, setSelectedSource] = useState("");
   const [services, setServices] = useState<Services>({ model: false, transcription: false });
   const [sessionState, setSessionState] = useState<SessionState>("prepare");
+  const [overlayOpacity, setOverlayOpacity] = useState(loadOverlayOpacity);
+  const [clickThrough, setClickThrough] = useState(false);
   const [heardText, setHeardText] = useState("");
   const [screenText, setScreenText] = useState("");
   const [answer, setAnswer] = useState("");
+  const answerRef = useRef("");
   const [answerBusy, setAnswerBusy] = useState(false);
   const answerBusyRef = useRef(false);
+  const pendingAnswerRef = useRef(false);
   const [sourceBusy, setSourceBusy] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [sessionNotice, setSessionNotice] = useState("");
@@ -158,6 +189,7 @@ function App() {
   const [ocrProgress, setOcrProgress] = useState("");
   const [audioLanguage, setAudioLanguage] = useState("");
   const [audioAvailable, setAudioAvailable] = useState(false);
+  const [audioSignal, setAudioSignal] = useState(false);
   const [showContext, setShowContext] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -171,6 +203,8 @@ function App() {
   const audioChunksRef = useRef<Float32Array[]>([]);
   const audioSamplesRef = useRef(0);
   const audioBusyRef = useRef(false);
+  const audioSignalRef = useRef(false);
+  const lastAudioSignalAtRef = useRef(0);
   const activeCaptureRef = useRef(false);
   const ocrBusyRef = useRef(false);
   const lastQuestionRef = useRef("");
@@ -185,6 +219,7 @@ function App() {
   useEffect(() => { jobRef.current = jobDescription; }, [jobDescription]);
   useEffect(() => { heardRef.current = heardText; }, [heardText]);
   useEffect(() => { screenTextRef.current = screenText; }, [screenText]);
+  useEffect(() => window.interviewAgent.onClickThroughChanged(setClickThrough), []);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -238,7 +273,11 @@ function App() {
   const requestAnswer = useCallback(async (questionOverride?: string) => {
     const transcript = questionOverride || heardRef.current;
     const screen = screenTextRef.current;
-    if ((!transcript.trim() && !screen.trim()) || answerBusyRef.current) return;
+    if (!transcript.trim() && !screen.trim()) return;
+    if (answerBusyRef.current) {
+      pendingAnswerRef.current = true;
+      return;
+    }
     answerBusyRef.current = true;
     setAnswerBusy(true);
     setSessionNotice("");
@@ -249,24 +288,32 @@ function App() {
         transcript,
         screenText: screen,
       });
-      setAnswer(suggestion || "I could not form a clear answer from the available context yet.");
+      const nextAnswer = looksLikeQuestionEcho(suggestion)
+        ? "I couldn't find a grounded answer in the resume context. Add a verified detail and refresh."
+        : suggestion || "I could not form a clear answer from the available context yet.";
+      answerRef.current = nextAnswer;
+      setAnswer(nextAnswer);
     } catch (error) {
       setSessionNotice(error instanceof Error ? error.message : "The local answer service is unavailable.");
     } finally {
       answerBusyRef.current = false;
       setAnswerBusy(false);
+      if (pendingAnswerRef.current) {
+        pendingAnswerRef.current = false;
+        window.setTimeout(() => { void requestAnswer(); }, 180);
+      }
     }
   }, []);
 
   const scheduleAnswer = useCallback((text: string) => {
     if (!questionLike(text)) return;
-    const signature = text.trim().toLowerCase().slice(-420);
-    if (signature === lastQuestionRef.current) return;
+    const signature = normalizeForMatch(text).slice(-420);
+    if (signature === lastQuestionRef.current || similarSignature(signature, lastQuestionRef.current)) return;
     if (answerTimerRef.current) window.clearTimeout(answerTimerRef.current);
     answerTimerRef.current = window.setTimeout(() => {
       lastQuestionRef.current = signature;
       void requestAnswer();
-    }, 1400);
+    }, ANSWER_DEBOUNCE_MS);
   }, [requestAnswer]);
 
   const appendHeard = useCallback((text: string, language?: string) => {
@@ -323,14 +370,24 @@ function App() {
       if (!context) return;
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const { data } = await worker.recognize(canvas);
+      const answerWords = answerRef.current.toLowerCase().match(/[\p{L}\p{N}']+/gu) || [];
+      const answerPhrases: string[] = [];
+      for (let index = 0; index + 4 <= answerWords.length; index += 2) {
+        answerPhrases.push(answerWords.slice(index, index + 4).join(" "));
+      }
       const text = data.text
         .split(/\r?\n/)
-        .filter((line) => !/interview copilot|suggested answer|audio listening|screen captured|use as a guide|pause session/i.test(line))
+        .filter((line) => {
+          const normalized = line.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+          const isAnswer = answerPhrases.some((phrase) => normalized.includes(phrase));
+          const isOverlayChrome = /interview copilot|suggested answer|audio listening|screen captured|screen text ready|reading screen|use as a guide|pause session|click-through|visible in screen capture|opacity|live transcription|shaping a concise answer|grounded suggestion|listening for the next question|refresh answer|your context|\blive\b|\bpaused\b/i.test(line);
+          return !isAnswer && !isOverlayChrome;
+        })
         .join(" ")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 2400);
-      if (text && text.toLowerCase() !== screenTextRef.current.toLowerCase()) {
+      if (text && normalizeForMatch(text) !== normalizeForMatch(screenTextRef.current)) {
         screenTextRef.current = text;
         setScreenText(text);
         scheduleAnswer(`${heardRef.current}\n${text}`);
@@ -346,8 +403,11 @@ function App() {
   const startCapture = useCallback(async () => {
     if (!selectedSource) throw new Error("Choose a screen or window first.");
     setSessionNotice("");
+    const audioContext = new AudioContext();
+    audioContextRef.current = audioContext;
+    void audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions; screen text capture remains available."));
     const display = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 1 },
+      video: { frameRate: { ideal: 5, max: 10 } },
       audio: true,
     });
     screenStreamRef.current = display;
@@ -367,8 +427,9 @@ function App() {
       setSessionNotice("Microphone permission was unavailable; listening to shared system audio only.");
     }
 
-    const audioContext = new AudioContext();
-    audioContextRef.current = audioContext;
+    if (audioContext.state === "suspended") {
+      await audioContext.resume().catch(() => setSessionNotice("Audio processing could not start. Check audio permissions; screen text capture remains available."));
+    }
     const mix = audioContext.createGain();
     const systemTrack = display.getAudioTracks()[0];
     const hasAudio = Boolean(systemTrack || mic?.getAudioTracks().length);
@@ -394,10 +455,27 @@ function App() {
     audioChunksRef.current = [];
     audioSamplesRef.current = 0;
     activeCaptureRef.current = true;
+    audioSignalRef.current = false;
+    lastAudioSignalAtRef.current = 0;
+    setAudioSignal(false);
 
     processor.onaudioprocess = (event) => {
       if (!activeCaptureRef.current) return;
       const incoming = new Float32Array(event.inputBuffer.getChannelData(0));
+      let energy = 0;
+      for (let index = 0; index < incoming.length; index += 4) energy += incoming[index] * incoming[index];
+      const rms = Math.sqrt(energy / Math.max(1, Math.ceil(incoming.length / 4)));
+      const now = Date.now();
+      if (rms > 0.003) {
+        lastAudioSignalAtRef.current = now;
+        if (!audioSignalRef.current) {
+          audioSignalRef.current = true;
+          setAudioSignal(true);
+        }
+      } else if (audioSignalRef.current && now - lastAudioSignalAtRef.current > 1500) {
+        audioSignalRef.current = false;
+        setAudioSignal(false);
+      }
       audioChunksRef.current.push(incoming);
       audioSamplesRef.current += incoming.length;
       const windowSamples = Math.floor(audioContext.sampleRate * AUDIO_WINDOW_SECONDS);
@@ -419,7 +497,7 @@ function App() {
       setOcrProgress("Offline screen reader files are missing. Run setup-interview-agent.ps1 again.");
     }
     if (ocrTimerRef.current !== null) window.clearInterval(ocrTimerRef.current);
-    ocrTimerRef.current = window.setInterval(() => { void inspectScreen(); }, 5200);
+    ocrTimerRef.current = window.setInterval(() => { void inspectScreen(); }, 1500);
     display.getTracks().forEach((track) => {
       track.addEventListener("ended", () => {
         if (activeCaptureRef.current) {
@@ -454,6 +532,9 @@ function App() {
     audioChunksRef.current = [];
     audioSamplesRef.current = 0;
     audioBusyRef.current = false;
+    audioSignalRef.current = false;
+    lastAudioSignalAtRef.current = 0;
+    setAudioSignal(false);
     setOcrProgress("");
   }, []);
   stopCaptureRef.current = stopCapture;
@@ -487,9 +568,10 @@ function App() {
       setSessionState("live");
       setSessionNotice("");
     } catch (error) {
+      await stopCapture();
       setSessionNotice(error instanceof Error ? error.message : "Could not resume capture.");
     }
-  }, [startCapture]);
+  }, [startCapture, stopCapture]);
 
   const endSession = useCallback(async () => {
     await stopCapture();
@@ -539,11 +621,34 @@ function App() {
   };
 
   if (sessionState !== "prepare") {
+    const overlayStyle = { "--overlay-alpha": String(overlayOpacity / 100) } as CSSProperties;
     return (
-      <main className="window-frame overlay-frame">
+      <main className="window-frame overlay-frame" style={overlayStyle}>
         <header className="titlebar titlebar-dark">
           <div className="brand brand-light"><span className="brand-mark"><Sparkles size={13} /></span><span>Interview Copilot</span></div>
           <div className="window-actions">
+            <label className="opacity-control" title="Overlay opacity">
+              <span>Opacity</span>
+              <input
+                aria-label="Overlay opacity"
+                type="range"
+                min="65"
+                max="100"
+                value={overlayOpacity}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setOverlayOpacity(next);
+                  localStorage.setItem(OPACITY_KEY, String(next));
+                }}
+              />
+            </label>
+            <button
+              className={`window-icon light ${clickThrough ? "active" : ""}`}
+              onClick={() => void window.interviewAgent.setClickThrough(!clickThrough).then(setClickThrough)}
+              aria-label={clickThrough ? "Turn click-through off" : "Turn click-through on"}
+              aria-pressed={clickThrough}
+              title={clickThrough ? `Click-through on · ${clickThroughShortcut} to restore pointer input` : `Click-through · ${clickThroughShortcut} toggles it`}
+            ><MousePointer2 size={14} /></button>
             <button className="window-icon light" onClick={() => void window.interviewAgent.minimize()} aria-label="Minimize"><Minus size={15} /></button>
             <button className="window-icon light" onClick={() => void window.interviewAgent.close()} aria-label="Close"><X size={16} /></button>
           </div>
@@ -555,7 +660,7 @@ function App() {
               {sessionState === "live" ? <><span className="live-pulse" /> LIVE</> : <><Pause size={11} /> PAUSED</>}
             </span>
             <span className="capture-state"><MonitorUp size={14} /> {sessionState === "live" ? "Screen captured" : "Screen paused"}</span>
-            <span className="capture-state"><Headphones size={14} /> {sessionState === "live" ? (audioAvailable ? "Audio listening" : "Audio unavailable") : "Audio paused"}</span>
+            <span className="capture-state"><Headphones size={14} /> {sessionState === "live" ? (audioAvailable ? (audioSignal ? "Audio signal detected" : "Audio listening") : "Audio unavailable") : "Audio paused"}</span>
           </div>
 
           <section className="overlay-section heard-section">
@@ -578,6 +683,7 @@ function App() {
           </section>
 
           {(sessionNotice || ocrProgress) && <p className="overlay-notice">{sessionNotice || ocrProgress}</p>}
+          {clickThrough && <p className="overlay-notice">Click-through is temporary (20s) · press {clickThroughShortcut} to restore pointer input.</p>}
 
           {showContext && (
             <section className="context-peek">
@@ -606,6 +712,7 @@ function App() {
           <button className="context-toggle" onClick={() => setShowContext((value) => !value)}>
             <FileText size={13} /> Your context <ChevronDown className={showContext ? "chevron-open" : ""} size={13} />
           </button>
+          <p className="overlay-visibility-note">This overlay remains visible in screen capture.</p>
         </div>
         <video ref={videoRef} className="capture-video" muted playsInline />
       </main>
@@ -645,15 +752,15 @@ function App() {
             <span className="field-hint">{resume ? `${resume.length.toLocaleString()} characters` : "TXT, MD, PDF, DOCX"}</span>
           </label>
           <label className="context-field">
-            <span className="field-label">Job description</span>
+            <span className="field-label">Job description (optional)</span>
             <div className="textarea-wrap" onDragOver={(event) => event.preventDefault()} onDrop={onFileDrop("jobDescription")}>
-              <textarea value={jobDescription} onChange={(event) => setJobDescription(event.target.value)} placeholder="Paste the role description here, or add a file." />
+              <textarea value={jobDescription} onChange={(event) => setJobDescription(event.target.value)} placeholder="Add a role description to tailor suggestions, if available." />
               <label className="file-add" title="Add job description file">
                 <input type="file" accept=".txt,.md,.pdf,.docx" onChange={onFileInput("jobDescription")} />
                 <FolderOpen size={15} /><span>Add file</span>
               </label>
             </div>
-            <span className="field-hint">{jobDescription ? `${jobDescription.length.toLocaleString()} characters` : "TXT, MD, PDF, DOCX"}</span>
+            <span className="field-hint">{jobDescription ? `${jobDescription.length.toLocaleString()} characters` : "Optional · TXT, MD, PDF, DOCX"}</span>
           </label>
         </div>
 
@@ -701,7 +808,7 @@ function App() {
             <button
               className="button button-primary"
               onClick={() => void beginSession()}
-              disabled={!resume.trim() || !jobDescription.trim() || !selectedSource || !services.model || !services.transcription}
+              disabled={!resume.trim() || !selectedSource || !services.model || !services.transcription}
             >
               Start session <ChevronRight size={16} />
             </button>
