@@ -28,6 +28,8 @@ interface Window {
       resume: string;
       jobDescription: string;
       question: string;
+      requestId?: number;
     }): Promise<string>;
+    onAnswerChunk(callback: (payload: { requestId?: number; text: string }) => void): () => void;
   };
 }

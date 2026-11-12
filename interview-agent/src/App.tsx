@@ -43,7 +43,7 @@ const CONTEXT_KEY = "interview-copilot-context-v1";
 const OPACITY_KEY = "interview-copilot-overlay-opacity-v1";
 const VOICE_SAMPLE_SECONDS = 8;
 const SPEECH_RMS_THRESHOLD = 0.003;
-const SPEECH_END_SILENCE_MS = 700;
+const SPEECH_END_SILENCE_MS = 450;
 const SPEECH_PREROLL_SECONDS = 0.2;
 const MAX_UTTERANCE_SECONDS = 24;
 const SCREEN_QUESTION_AUDIO_PRIORITY_MS = 10_000;
@@ -436,11 +436,29 @@ function App() {
       while (current) {
         try {
           const verifiedContextFallback = conservativeAnswer(current.question, resumeRef.current);
-          const suggestion = verifiedContextFallback || await window.interviewAgent.suggestAnswer({
-              resume: resumeRef.current,
-              jobDescription: jobRef.current,
-              question: current.question,
+          let suggestion = verifiedContextFallback;
+          if (!suggestion) {
+            const unsubscribe = window.interviewAgent.onAnswerChunk(({ requestId, text }) => {
+              if (
+                requestId === current.requestId
+                && current.requestId === answerRequestIdRef.current
+                && text
+              ) {
+                answerRef.current = text;
+                setAnswer(text);
+              }
             });
+            try {
+              suggestion = await window.interviewAgent.suggestAnswer({
+                resume: resumeRef.current,
+                jobDescription: jobRef.current,
+                question: current.question,
+                requestId: current.requestId,
+              });
+            } finally {
+              unsubscribe();
+            }
+          }
           if (current.requestId === answerRequestIdRef.current) {
             const nextAnswer = looksLikeQuestionEcho(suggestion)
               ? "I couldn't find a grounded answer in the resume context. Add a verified detail and refresh."

@@ -23,6 +23,37 @@ function setClickThrough(enabled) {
   return clickThroughEnabled;
 }
 
+const RESUME_CONTEXT_LIMIT = 4000;
+
+function selectResumeContext(resume, question) {
+  const text = String(resume || "").trim();
+  if (text.length <= RESUME_CONTEXT_LIMIT) return text;
+  const blocks = text.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+  if (blocks.length < 2) return text.slice(0, RESUME_CONTEXT_LIMIT);
+  const questionWords = new Set(
+    String(question || "").toLowerCase().match(/[a-z0-9+#.]{3,}/g) || [],
+  );
+  const scored = blocks.map((block, index) => {
+    const blockWords = new Set(block.toLowerCase().match(/[a-z0-9+#.]{3,}/g) || []);
+    let overlap = 0;
+    for (const word of blockWords) if (questionWords.has(word)) overlap += 1;
+    return { block, index, score: index === 0 ? Number.POSITIVE_INFINITY : overlap };
+  });
+  const picked = [];
+  let used = 0;
+  for (const entry of [...scored].sort((a, b) => b.score - a.score)) {
+    if (used + entry.block.length > RESUME_CONTEXT_LIMIT && picked.length) continue;
+    picked.push(entry);
+    used += entry.block.length;
+    if (used >= RESUME_CONTEXT_LIMIT) break;
+  }
+  return picked
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.block)
+    .join("\n\n")
+    .slice(0, RESUME_CONTEXT_LIMIT);
+}
+
 function modelHeaders() {
   const headers = { "Content-Type": "application/json" };
   const keyPath = path.join(process.env.LOCALAPPDATA || "", "local-agent", "api-key.txt");
@@ -193,8 +224,8 @@ app.whenReady().then(() => {
     return response.json();
   });
 
-  ipcMain.handle("answers:suggest", async (_event, payload) => {
-    const { resume, jobDescription, question } = payload || {};
+  ipcMain.handle("answers:suggest", async (event, payload) => {
+    const { resume, jobDescription, question, requestId } = payload || {};
     const currentQuestion = String(question || "").trim();
     if (!currentQuestion) return "";
     const headers = modelHeaders();
@@ -205,7 +236,8 @@ app.whenReady().then(() => {
       body: JSON.stringify({
         model: "k2-horizon-7b",
         temperature: 0.2,
-        max_tokens: 384,
+        max_tokens: 160,
+        stream: true,
         chat_template_kwargs: { reasoning_effort: "low" },
         messages: [
           {
@@ -214,14 +246,42 @@ app.whenReady().then(() => {
           },
           {
             role: "user",
-            content: `CURRENT INTERVIEW QUESTION\n${currentQuestion.slice(0, 1000)}\n\nRESUME\n${String(resume || "").slice(0, 8000)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 5000)}\n\nAnswer the current question above. Keep every claim grounded in the resume.`,
+            content: `CURRENT INTERVIEW QUESTION\n${currentQuestion.slice(0, 1000)}\n\nRESUME\n${selectResumeContext(resume, currentQuestion)}\n\nJOB DESCRIPTION\n${String(jobDescription || "").slice(0, 1500)}\n\nAnswer the current question above. Keep every claim grounded in the resume.`,
           },
         ],
       }),
     });
     if (!response.ok) throw new Error(`Local model returned ${response.status}`);
-    const result = await response.json();
-    return String(result?.choices?.[0]?.message?.content || "").trim();
+    if (!response.body) {
+      const result = await response.json();
+      return String(result?.choices?.[0]?.message?.content || "").trim();
+    }
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullText = "";
+    let lastSentLength = 0;
+    for await (const chunk of response.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const data = trimmed.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+        try {
+          const piece = JSON.parse(data)?.choices?.[0]?.delta?.content;
+          if (typeof piece === "string" && piece) {
+            fullText += piece;
+            if (fullText.length - lastSentLength >= 12 && !event.sender.isDestroyed()) {
+              lastSentLength = fullText.length;
+              event.sender.send("answers:chunk", { requestId, text: fullText.trimStart() });
+            }
+          }
+        } catch { /* Ignore keep-alive or partial frames. */ }
+      }
+    }
+    return fullText.trim();
   });
 
   createWindow();

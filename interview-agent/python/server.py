@@ -6,7 +6,7 @@ import io
 import json
 import os
 import wave
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import numpy as np
@@ -232,4 +232,4 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-HTTPServer((HOST, PORT), Handler).serve_forever()
+ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

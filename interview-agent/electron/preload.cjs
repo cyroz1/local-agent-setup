@@ -18,4 +18,9 @@ contextBridge.exposeInMainWorld("interviewAgent", {
   enrollVoice: (wavBytes) => ipcRenderer.invoke("speaker:enroll", wavBytes),
   clearVoiceProfile: () => ipcRenderer.invoke("speaker:clear"),
   suggestAnswer: (payload) => ipcRenderer.invoke("answers:suggest", payload),
+  onAnswerChunk: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("answers:chunk", listener);
+    return () => ipcRenderer.removeListener("answers:chunk", listener);
+  },
 });
